@@ -64,10 +64,23 @@ class BudgetAgent:
         ratio = min(ratio, 0.40)
         
         # 計算分配金額 (可用資金 * 權重)
-        invested_amount = available * ratio
+        target_budget = available * ratio
         
-        # 計算股數
-        shares = invested_amount / recommend_price
+        # 計算買入股數 (無條件捨去至整數股)
+        import math
+        shares = math.floor(target_budget / recommend_price)
+        
+        # 確保最低 1 股防線 (只要剩餘可用資金足夠買 1 股即可)
+        if shares < 1:
+            if available >= recommend_price:
+                shares = 1
+                print(f"[!] 預算代理人提示：為符合最低買入 1 股限制，將 {ticker} 股數調整為 1 股。")
+            else:
+                print(f"[!] 預算代理人提示：{currency} 可用資金 ({available:.2f}) 不足購買 {ticker} 的 1 股 (現價 {recommend_price:.2f})，不予分配。")
+                return 0.0, 0.0
+                
+        # 實際投入金額 = 股數 * 單價 (整數股買入後，金額會有精確小數點)
+        invested_amount = shares * recommend_price
         
         # 扣減 capital_ledger 中的可用資金
         new_available = available - invested_amount
@@ -82,8 +95,8 @@ class BudgetAgent:
                 (new_available, currency)
             )
             
-        print(f"[✓] 預算代理人：已為 {ticker} 動態分配預算 {invested_amount:.2f} {currency} (購買 {shares:.2f} 股)。")
-        return invested_amount, shares
+        print(f"[✓] 預算代理人：已為 {ticker} 動態分配預算 {invested_amount:.2f} {currency} (購買整數股：{shares} 股，現價：{recommend_price:.2f})。")
+        return invested_amount, float(shares)
 
     def record_purchase(self, rec_id: int, ticker: str, region: str, price: float, amount: float, shares: float):
         """
