@@ -222,7 +222,12 @@ def run_regional_analysis(region_code: str, report_date: str, reflection_directi
                         if "Strong Buy" in line or "強烈買入" in line: rating = "Strong Buy"
                         elif "Hold" in line or "持有" in line: rating = "Hold"
                 
-                db.save_recommendation(
+                # Dynamically allocate capital via BudgetAgent
+                from core.agents.budget_agent import BudgetAgent
+                budget_agent = BudgetAgent()
+                invested_amount, shares = budget_agent.allocate_budget(ticker, region_code, curr_price)
+                
+                rec_id = db.save_recommendation(
                     report_date=report_date,
                     region=region_code,
                     ticker=ticker,
@@ -231,9 +236,16 @@ def run_regional_analysis(region_code: str, report_date: str, reflection_directi
                     recommend_reason=f"板塊 {etf_ticker} 強勢動能領頭，基本面營收優異。",
                     target_price=target_p,
                     stop_loss=stop_l,
-                    rating=rating
+                    rating=rating,
+                    invested_amount=invested_amount,
+                    shares=shares
                 )
-                print_success(f"標的 {ticker} 推薦參數已成功寫入回測帳本！(現價: {curr_price:.2f} | 目標: {target_p:.2f} | 停損: {stop_l:.2f})")
+                
+                # Record purchase in budget agent transaction history
+                if invested_amount > 0.0:
+                    budget_agent.record_purchase(rec_id, ticker, region_code, curr_price, invested_amount, shares)
+                
+                print_success(f"標的 {ticker} 推薦參數與預算已成功寫入回測帳本！(現價: {curr_price:.2f} | 分配預算: {invested_amount:.2f} | 股數: {shares:.2f})")
             except Exception as ex:
                 print_warning(f"寫入推薦數據庫時發生輕微解析異常: {ex}")
                 

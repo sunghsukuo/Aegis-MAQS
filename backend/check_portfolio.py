@@ -65,6 +65,10 @@ def run_portfolio_check(report_date: str, regions: list = None):
             # Calculate current ROI
             performance = (current_price - recommend_price) / recommend_price
             
+            from core.agents.budget_agent import BudgetAgent
+            budget_agent = BudgetAgent()
+            currency = budget_agent.get_currency_by_region(region)
+            
             # Check wind-down/close triggers: Profit Target or Stop Loss
             if target_price and current_price >= target_price:
                 print_success(
@@ -74,7 +78,7 @@ def run_portfolio_check(report_date: str, regions: list = None):
                     f"   - 累計投報率: {performance*100:+.2f}%\n"
                     f"   - 執行動作: 獲利平倉 (CLOSE POSITIONS)"
                 )
-                db.close_recommendation(rec_id, current_price, report_date, performance)
+                budget_agent.record_sale(rec_id, ticker, region, current_price, report_date, performance)
                 closed_count += 1
             elif stop_loss and current_price <= stop_loss:
                 print_warning(
@@ -84,15 +88,18 @@ def run_portfolio_check(report_date: str, regions: list = None):
                     f"   - 累計投報率: {performance*100:+.2f}%\n"
                     f"   - 執行動作: 避險平倉 (STOP LOSS TRIGGERED)"
                 )
-                db.close_recommendation(rec_id, current_price, report_date, performance)
+                budget_agent.record_sale(rec_id, ticker, region, current_price, report_date, performance)
                 closed_count += 1
             else:
-                # Still active, update current unrealized ROI
-                db.update_recommendation_performance(rec_id, performance)
+                # Still active, calculate and update current unrealized ROI & PnL
+                shares = rec.get("shares", 0.0)
+                unrealized_pnl = shares * (current_price - recommend_price)
+                db.update_recommendation_performance(rec_id, performance, unrealized_pnl)
+                
                 print_info(
                     f"📈 {ticker:<9} | 現價: {current_price:>8.2f} | "
                     f"買入: {recommend_price:>8.2f} | 區間: [{stop_loss or 0:.1f} - {target_price or 0:.1f}] | "
-                    f"未實現損益: {performance*100:>+6.2f}%"
+                    f"未實現損益: {performance*100:>+6.2f}% ({unrealized_pnl:>+8.2f} {currency})"
                 )
                 active_count += 1
                 

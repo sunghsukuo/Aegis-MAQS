@@ -120,6 +120,9 @@ def init_db():
                     close_price DOUBLE,                    -- Price when closed
                     close_date VARCHAR(50),                -- Date when closed
                     performance DOUBLE,                    -- ROI (e.g. 0.05 for +5%)
+                    invested_amount DOUBLE DEFAULT 0.0,    -- Capital allocated for this stock
+                    shares DOUBLE DEFAULT 0.0,             -- Total shares bought
+                    pnl DOUBLE DEFAULT 0.0,                -- Realized/Unrealized P&L in currency
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     INDEX idx_report_date (report_date),
                     INDEX idx_ticker (ticker)
@@ -142,9 +145,106 @@ def init_db():
                     close_price REAL,               -- Price when closed
                     close_date TEXT,                -- Date when closed
                     performance REAL,               -- ROI (e.g. 0.05 for +5%)
+                    invested_amount REAL DEFAULT 0.0,
+                    shares REAL DEFAULT 0.0,
+                    pnl REAL DEFAULT 0.0,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
+
+        # 3. Capital Ledger Table DDL
+        if DB_TYPE == "mysql":
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS capital_ledger (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    currency VARCHAR(10) UNIQUE NOT NULL, -- 'USD' or 'TWD'
+                    available_capital DOUBLE NOT NULL,
+                    reserved_cash DOUBLE NOT NULL,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+            """)
+        else:
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS capital_ledger (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    currency TEXT UNIQUE NOT NULL,
+                    available_capital REAL NOT NULL,
+                    reserved_cash REAL NOT NULL,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
+        # 4. Transaction History Table DDL
+        if DB_TYPE == "mysql":
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS transaction_history (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    rec_id INT NOT NULL,
+                    action VARCHAR(50) NOT NULL,          -- 'BUY', 'SELL_PROFIT_TARGET', 'SELL_STOP_LOSS'
+                    ticker VARCHAR(50) NOT NULL,
+                    currency VARCHAR(10) NOT NULL,
+                    shares DOUBLE NOT NULL,
+                    price DOUBLE NOT NULL,
+                    amount DOUBLE NOT NULL,               -- shares * price
+                    roi DOUBLE DEFAULT 0.0,
+                    pnl DOUBLE DEFAULT 0.0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    INDEX idx_ticker_tx (ticker)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+            """)
+        else:
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS transaction_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    rec_id INTEGER NOT NULL,
+                    action TEXT NOT NULL,
+                    ticker TEXT NOT NULL,
+                    currency TEXT NOT NULL,
+                    shares REAL NOT NULL,
+                    price REAL NOT NULL,
+                    amount REAL NOT NULL,
+                    roi REAL DEFAULT 0.0,
+                    pnl REAL DEFAULT 0.0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
+        # Check and alter recommendations table if columns are missing in existing tables
+        if DB_TYPE == "mysql":
+            cursor.execute("SHOW COLUMNS FROM recommendations LIKE 'invested_amount'")
+            if not cursor.fetchone():
+                cursor.execute("ALTER TABLE recommendations ADD COLUMN invested_amount DOUBLE DEFAULT 0.0;")
+                cursor.execute("ALTER TABLE recommendations ADD COLUMN shares DOUBLE DEFAULT 0.0;")
+                cursor.execute("ALTER TABLE recommendations ADD COLUMN pnl DOUBLE DEFAULT 0.0;")
+                print("[✓] MySQL recommendations table upgraded with capital tracking columns.")
+        else:
+            cursor.execute("PRAGMA table_info(recommendations)")
+            cols = [row[1] for row in cursor.fetchall()]
+            if "invested_amount" not in cols:
+                cursor.execute("ALTER TABLE recommendations ADD COLUMN invested_amount REAL DEFAULT 0.0;")
+                cursor.execute("ALTER TABLE recommendations ADD COLUMN shares REAL DEFAULT 0.0;")
+                cursor.execute("ALTER TABLE recommendations ADD COLUMN pnl REAL DEFAULT 0.0;")
+                print("[✓] SQLite recommendations table upgraded with capital tracking columns.")
+
+        # Seed capital_ledger with default starting balances if empty
+        execute_sql(cursor,
+            "SELECT COUNT(*) FROM capital_ledger",
+            "SELECT COUNT(*) FROM capital_ledger"
+        )
+        row = cursor.fetchone()
+        count = row[0] if isinstance(row, tuple) else row.get("COUNT(*)") or row.get("count(*)") or list(row.values())[0]
+        if count == 0:
+            # Seed USD: Available 100k, Reserved 20k
+            execute_sql(cursor,
+                "INSERT INTO capital_ledger (currency, available_capital, reserved_cash) VALUES ('USD', 100000.0, 20000.0)",
+                "INSERT INTO capital_ledger (currency, available_capital, reserved_cash) VALUES ('USD', 100000.0, 20000.0)"
+            )
+            # Seed TWD: Available 1M, Reserved 200k
+            execute_sql(cursor,
+                "INSERT INTO capital_ledger (currency, available_capital, reserved_cash) VALUES ('TWD', 1000000.0, 200000.0)",
+                "INSERT INTO capital_ledger (currency, available_capital, reserved_cash) VALUES ('TWD', 1000000.0, 200000.0)"
+            )
+            print("[✓] Database seeded with starting capital: USD 120,000 and TWD 1,200,000.")
 
 # Proactively trigger DB initialization on module import
 init_db()
@@ -237,8 +337,9 @@ def list_all_reports():
 
 def save_recommendation(report_date: str, region: str, ticker: str, company_name: str,
                         recommend_price: float, recommend_reason: str,
-                        target_price: float = None, stop_loss: float = None, rating: str = "Buy"):
-    """Inserts a new stock recommendation for weekly tracking."""
+                        target_price: float = None, stop_loss: float = None, rating: str = "Buy",
+                        invested_amount: float = 0.0, shares: float = 0.0) -> int:
+    """Inserts a new stock recommendation for weekly tracking, returning the inserted row ID."""
     with db_session() as conn:
         cursor = conn.cursor()
         execute_sql(cursor,
@@ -246,19 +347,22 @@ def save_recommendation(report_date: str, region: str, ticker: str, company_name
             """
             INSERT INTO recommendations (
                 report_date, region, ticker, company_name, recommend_price,
-                recommend_reason, target_price, stop_loss, rating, is_active
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+                recommend_reason, target_price, stop_loss, rating, is_active,
+                invested_amount, shares, pnl
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, 0.0)
             """,
             # MySQL:
             """
             INSERT INTO recommendations (
                 report_date, region, ticker, company_name, recommend_price,
-                recommend_reason, target_price, stop_loss, rating, is_active
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 1)
+                recommend_reason, target_price, stop_loss, rating, is_active,
+                invested_amount, shares, pnl
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 1, %s, %s, 0.0)
             """,
             (report_date, region, ticker.upper(), company_name, recommend_price,
-             recommend_reason, target_price, stop_loss, rating)
+             recommend_reason, target_price, stop_loss, rating, invested_amount, shares)
         )
+        return cursor.lastrowid
 
 def get_active_recommendations(region: str = None):
     """Fetches all recommendations currently active and needing price checks."""
@@ -304,24 +408,24 @@ def close_recommendation(rec_id: int, close_price: float, close_date: str, perfo
             (close_price, close_date, performance, rec_id)
         )
 
-def update_recommendation_performance(rec_id: int, performance: float):
-    """Updates the current unrealized performance (ROI) for an active recommendation."""
+def update_recommendation_performance(rec_id: int, performance: float, pnl: float = 0.0):
+    """Updates the current unrealized performance (ROI) and PnL for an active recommendation."""
     with db_session() as conn:
         cursor = conn.cursor()
         execute_sql(cursor,
             # SQLite:
             """
             UPDATE recommendations
-            SET performance = ?
+            SET performance = ?, pnl = ?
             WHERE id = ?
             """,
             # MySQL:
             """
             UPDATE recommendations
-            SET performance = %s
+            SET performance = %s, pnl = %s
             WHERE id = %s
             """,
-            (performance, rec_id)
+            (performance, pnl, rec_id)
         )
 
 def get_historical_performance():
