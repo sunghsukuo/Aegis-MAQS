@@ -313,7 +313,7 @@ def run_regional_analysis(region_code: str, report_date: str, reflection_directi
                 curr_price = financials.get("current_price", 0.0)
                 target_p = curr_price * 1.15 if curr_price else 0.0
                 stop_l = curr_price * 0.92 if curr_price else 0.0
-                rating = "Buy"
+                rating = "Hold"
                 suggested_weight = None
                 
                 # Robust regex extraction parsing logic from LLM Markdown output
@@ -328,8 +328,15 @@ def run_regional_analysis(region_code: str, report_date: str, reflection_directi
                         if parsed_val > 0.0: 
                             stop_l = parsed_val
                     elif "投資評級" in line:
-                        if "Strong Buy" in line or "強烈買入" in line: rating = "Strong Buy"
-                        elif "Hold" in line or "持有" in line: rating = "Hold"
+                        line_upper = line.upper()
+                        if "STRONG BUY" in line_upper or "強烈買入" in line_upper:
+                            rating = "Strong Buy"
+                        elif "BUY" in line_upper or "買入" in line_upper:
+                            rating = "Buy"
+                        elif "HOLD" in line_upper or "持有" in line_upper or "NEUTRAL" in line_upper or "觀望" in line_upper:
+                            rating = "Hold"
+                        elif "SELL" in line_upper or "賣出" in line_upper or "避開" in line_upper:
+                            rating = "Sell"
                     elif "建議持倉權重" in line or "持倉權重" in line or "建議權重" in line:
                         import re
                         weight_match = re.search(r"(\d+(?:\.\d+)?)\s*%", line)
@@ -347,8 +354,10 @@ def run_regional_analysis(region_code: str, report_date: str, reflection_directi
                         suggested_weight = 0.15
                     elif rating == "Hold":
                         suggested_weight = 0.05
+                    elif rating == "Sell":
+                        suggested_weight = 0.0
                     else:
-                        suggested_weight = 0.10
+                        suggested_weight = 0.0
                 
                 # Dynamically allocate capital via BudgetAgent using parsed AI weight
                 from core.agents.budget_agent import BudgetAgent
@@ -918,7 +927,7 @@ def run_realtime_query(query_str: str, track_option: bool, report_date: str):
     # 7. Parse output parameters
     target_p = curr_price * 1.15
     stop_l = curr_price * 0.92
-    rating = "Buy"
+    rating = "Hold"
     suggested_weight = None
     
     lines = stock_report.split("\n")
@@ -930,8 +939,15 @@ def run_realtime_query(query_str: str, track_option: bool, report_date: str):
             parsed_val = extract_price_from_line(line, curr_price)
             if parsed_val > 0.0: stop_l = parsed_val
         elif "投資評級" in line:
-            if "Strong Buy" in line or "強烈買入" in line: rating = "Strong Buy"
-            elif "Hold" in line or "持有" in line: rating = "Hold"
+            line_upper = line.upper()
+            if "STRONG BUY" in line_upper or "強烈買入" in line_upper:
+                rating = "Strong Buy"
+            elif "BUY" in line_upper or "買入" in line_upper:
+                rating = "Buy"
+            elif "HOLD" in line_upper or "持有" in line_upper or "NEUTRAL" in line_upper or "觀望" in line_upper:
+                rating = "Hold"
+            elif "SELL" in line_upper or "賣出" in line_upper or "避開" in line_upper:
+                rating = "Sell"
         elif "建議持倉權重" in line or "持倉權重" in line or "建議權重" in line:
             import re
             weight_match = re.search(r"(\d+(?:\.\d+)?)\s*%", line)
@@ -945,12 +961,23 @@ def run_realtime_query(query_str: str, track_option: bool, report_date: str):
         if rating == "Strong Buy": suggested_weight = 0.25
         elif rating == "Buy": suggested_weight = 0.15
         elif rating == "Hold": suggested_weight = 0.05
-        else: suggested_weight = 0.10
+        elif rating == "Sell": suggested_weight = 0.0
+        else: suggested_weight = 0.0
         
     # Determine currency
     currency = "USD" if region_code == "US" else "TWD"
     region_display = "美股 (US)" if region_code == "US" else "台股 (Taiwan)"
     
+    # Format display values based on rating
+    if rating in ["Hold", "Sell"]:
+        buy_range_display = "不建議買入 (N/A)"
+        target_p_display = "N/A"
+        stop_l_display = "N/A"
+    else:
+        buy_range_display = f"{curr_price * 0.98:.2f} - {curr_price * 1.02:.2f} {currency}"
+        target_p_display = f"{target_p:.2f} {currency}"
+        stop_l_display = f"{stop_l:.2f} {currency}"
+        
     # 8. Beautiful ASCII output table
     print_success("\n" + "="*50)
     print_success("📈 Aegis-MAQS 智慧決策操作指南對帳單")
@@ -962,9 +989,9 @@ def run_realtime_query(query_str: str, track_option: bool, report_date: str):
         ("企業名稱", company_name),
         ("推薦評級", rating),
         ("即時現價", f"{curr_price:.2f} {currency}"),
-        ("推薦買入區間", f"{curr_price * 0.98:.2f} - {curr_price * 1.02:.2f} {currency}"),
-        ("中線目標價", f"{target_p:.2f} {currency}"),
-        ("防禦停損點", f"{stop_l:.2f} {currency}"),
+        ("推薦買入區間", buy_range_display),
+        ("中線目標價", target_p_display),
+        ("防禦停損點", stop_l_display),
         ("建議持倉權重", f"{suggested_weight * 100:.1f}%")
     ]
     
