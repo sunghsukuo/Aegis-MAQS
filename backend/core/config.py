@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 # Load local environment variables from .env file
 # Root of backend is parent of core
 BACKEND_ROOT = Path(__file__).resolve().parent.parent
-load_dotenv(BACKEND_ROOT / ".env")
+load_dotenv(BACKEND_ROOT / ".env", override=True)
 
 # Core Paths
 CORE_DIR = BACKEND_ROOT / "core"
