@@ -346,23 +346,26 @@ def run_regional_analysis(region_code: str, report_date: str, reflection_directi
                             except ValueError:
                                 pass
 
-                # Semantic fallback based on parsed rating if LLM weight extraction failed
-                if suggested_weight is None or suggested_weight <= 0.0:
-                    if rating == "Strong Buy":
-                        suggested_weight = 0.25
-                    elif rating == "Buy":
-                        suggested_weight = 0.15
-                    elif rating == "Hold":
-                        suggested_weight = 0.05
-                    elif rating == "Sell":
-                        suggested_weight = 0.0
-                    else:
-                        suggested_weight = 0.0
-                
-                # Dynamically allocate capital via BudgetAgent using parsed AI weight
-                from core.agents.budget_agent import BudgetAgent
-                budget_agent = BudgetAgent()
-                invested_amount, shares = budget_agent.allocate_budget(ticker, region_code, curr_price, custom_weight=suggested_weight)
+                # Enforce that only Buy / Strong Buy ratings can allocate budget and be purchased.
+                # If rating is Hold/Sell, we force suggested_weight = 0.0 and skip budget allocation.
+                if rating not in ["Buy", "Strong Buy"]:
+                    suggested_weight = 0.0
+                    invested_amount = 0.0
+                    shares = 0.0
+                else:
+                    # Semantic fallback based on parsed rating if LLM weight extraction failed
+                    if suggested_weight is None or suggested_weight <= 0.0:
+                        if rating == "Strong Buy":
+                            suggested_weight = 0.25
+                        elif rating == "Buy":
+                            suggested_weight = 0.15
+                        else:
+                            suggested_weight = 0.0
+                    
+                    # Dynamically allocate capital via BudgetAgent using parsed AI weight
+                    from core.agents.budget_agent import BudgetAgent
+                    budget_agent = BudgetAgent()
+                    invested_amount, shares = budget_agent.allocate_budget(ticker, region_code, curr_price, custom_weight=suggested_weight)
                 
                 rec_id = db.save_recommendation(
                     report_date=report_date,
