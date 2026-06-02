@@ -803,6 +803,7 @@ def resolve_ticker_and_region_via_llm(query_str: str) -> tuple:
             "You are a financial database utility. Your job is to translate a user's input (stock name, Chinese name, or ticker) "
             "into standard format: standard Yahoo Finance ticker, region code ('US' or 'Taiwan'), and English official company name. "
             "Format your response strictly as a JSON object: {\"ticker\": \"...\", \"region\": \"...\", \"company_name\": \"...\"}. "
+            "Specifically for Taiwan stocks, note that Yahoo Finance uses '.TW' for TWSE (Main board) listed companies and '.TWO' for TPEx (OTC/GreTai board) listed companies (e.g., TSMC is '2330.TW', but TPEx companies like IGS 鈊象 must be '3293.TWO', 8070 晉泰 must be '8070.TWO', etc.). Make sure to resolve the correct board suffix (.TW vs .TWO) based on your financial database knowledge. "
             "No markdown formatting, no code block backticks, no explanations. Just raw JSON."
         )
     )
