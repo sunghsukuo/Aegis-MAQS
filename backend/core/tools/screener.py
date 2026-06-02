@@ -213,6 +213,13 @@ class QuantScreener:
                 except Exception:
                     pass
                 
+                # Override with Chinese name for Taiwan stocks to prevent translation hallucinations
+                if region == "Taiwan" or ticker.endswith(".TW") or ticker.endswith(".TWO"):
+                    ticker_num = ticker.split(".")[0]
+                    from core.config import TAIWAN_NAMES
+                    if ticker_num in TAIWAN_NAMES:
+                        name = f"{TAIWAN_NAMES[ticker_num]} ({name})"
+                
                 # 5. Combined Score
                 # Return score is weekly return in % (e.g. 8.5% is 8.5)
                 return_score = weekly_return * 100

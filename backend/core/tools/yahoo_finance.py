@@ -259,10 +259,18 @@ def _get_stock_financials_raw(ticker: str) -> dict:
         if ticker.upper() in configured_etfs and is_etf_in_config:
             is_etf = True
         
+    # Get company name
+    raw_name = info.get("longName") or info.get("shortName") or ticker
+    if ticker.endswith(".TW") or ticker.endswith(".TWO"):
+        ticker_num = ticker.split(".")[0]
+        from core.config import TAIWAN_NAMES
+        if ticker_num in TAIWAN_NAMES:
+            raw_name = f"{TAIWAN_NAMES[ticker_num]} ({raw_name})"
+            
     # Parse financials safely
     financials = {
         "ticker": ticker,
-        "company_name": info.get("longName") or info.get("shortName") or ticker,
+        "company_name": raw_name,
         "current_price": float(current_price),
         "is_etf_proxy": is_etf,
         "market_cap": info.get("marketCap"),

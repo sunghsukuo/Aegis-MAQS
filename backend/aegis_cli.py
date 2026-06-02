@@ -123,6 +123,38 @@ def extract_price_from_line(line: str, current_price: float) -> float:
         return valid_prices[-1]  # Fallback to the last matched number
     return 0.0
 
+def extract_range_from_line(line: str, current_price: float) -> str:
+    """
+    Robustly extracts the buy range (low and high price) from a markdown line,
+    filtering out typical non-price constants like SMAs (50, 200) and weights,
+    and returns a formatted range string: 'low - high'.
+    """
+    import re
+    numbers = re.findall(r"(?:\$|NT\$|元)?\s*([\d,]+\.?[\d]*)\s*(?:元|%)?", line)
+    valid_nums = []
+    
+    for num_str in numbers:
+        num_str_clean = num_str.replace(",", "")
+        if not num_str_clean:
+            continue
+        try:
+            val = float(num_str_clean)
+            if val in [5.0, 10.0, 15.0, 20.0, 50.0, 200.0]:
+                if current_price and abs(val - current_price) / current_price > 0.5:
+                    continue
+            valid_nums.append(val)
+        except ValueError:
+            continue
+            
+    if len(valid_nums) >= 2:
+        low, high = sorted(valid_nums[:2])
+        if current_price:
+            if abs(low - current_price) / current_price < 0.5 and abs(high - current_price) / current_price < 0.5:
+                return f"{low:.2f} - {high:.2f}"
+        else:
+            return f"{low:.2f} - {high:.2f}"
+    return None
+
 def run_regional_analysis(region_code: str, report_date: str, reflection_directives: str) -> tuple:
     """
     Executes the analytical pipeline for a specific country/region:
@@ -791,8 +823,8 @@ def evolve_active_prompts():
 
 def resolve_ticker_and_region_via_llm(query_str: str) -> tuple:
     """
-    Uses a quick LLM call to resolve name or ticker to (standard_ticker, region_code, company_name).
-    Returns (None, None, None) if unresolved.
+    Uses a quick LLM call to resolve name or ticker to (standard_ticker, region_code, company_name, company_name_zh).
+    Returns (None, None, None, None) if unresolved.
     """
     import json
     from core.agents.base_agent import BaseAgent
@@ -801,8 +833,8 @@ def resolve_ticker_and_region_via_llm(query_str: str) -> tuple:
         role="Financial Ticker Translator",
         system_instruction=(
             "You are a financial database utility. Your job is to translate a user's input (stock name, Chinese name, or ticker) "
-            "into standard format: standard Yahoo Finance ticker, region code ('US' or 'Taiwan'), and English official company name. "
-            "Format your response strictly as a JSON object: {\"ticker\": \"...\", \"region\": \"...\", \"company_name\": \"...\"}. "
+            "into standard format: standard Yahoo Finance ticker, region code ('US' or 'Taiwan'), English official company name, and Chinese official company name. "
+            "Format your response strictly as a JSON object: {\"ticker\": \"...\", \"region\": \"...\", \"company_name\": \"...\", \"company_name_zh\": \"...\"}. "
             "Specifically for Taiwan stocks, note that Yahoo Finance uses '.TW' for TWSE (Main board) listed companies and '.TWO' for TPEx (OTC/GreTai board) listed companies (e.g., TSMC is '2330.TW', but TPEx companies like IGS 鈊象 must be '3293.TWO', 8070 晉泰 must be '8070.TWO', etc.). Make sure to resolve the correct board suffix (.TW vs .TWO) based on your financial database knowledge. "
             "No markdown formatting, no code block backticks, no explanations. Just raw JSON."
         )
@@ -818,10 +850,22 @@ def resolve_ticker_and_region_via_llm(query_str: str) -> tuple:
                 lines = lines[:-1]
             clean_resp = "\n".join(lines).strip()
         data = json.loads(clean_resp)
-        return data.get("ticker"), data.get("region"), data.get("company_name")
+        ticker = data.get("ticker")
+        region = data.get("region")
+        company_name = data.get("company_name")
+        company_name_zh = data.get("company_name_zh")
+        
+        # Override company names using our local TAIWAN_NAMES registry to ensure 100% correctness
+        if ticker and (ticker.endswith(".TW") or ticker.endswith(".TWO")):
+            ticker_num = ticker.split(".")[0]
+            from core.config import TAIWAN_NAMES
+            if ticker_num in TAIWAN_NAMES:
+                company_name_zh = TAIWAN_NAMES[ticker_num]
+                
+        return ticker, region, company_name, company_name_zh
     except Exception as e:
         print(f"[!] Ticker resolution error: {e}")
-        return None, None, None
+        return None, None, None, None
 
 def get_latest_regime_and_reflection(region: str) -> tuple:
     """
@@ -881,12 +925,13 @@ def run_realtime_query(query_str: str, track_option: bool, report_date: str):
     
     # 1. Resolve ticker
     print_info("正在解析標的名稱與交易所代碼...")
-    ticker, region_code, company_name = resolve_ticker_and_region_via_llm(query_str)
+    ticker, region_code, company_name, company_name_zh = resolve_ticker_and_region_via_llm(query_str)
     if not ticker or not region_code:
         print_error(f"無法解析此標的：'{query_str}'，請確認輸入是否正確。")
         return
         
-    print_success(f"成功解析！標準代碼: {ticker} | 市場區域: {region_code} | 公司名稱: {company_name}")
+    display_name = f"{company_name_zh} ({company_name})" if company_name_zh else company_name
+    print_success(f"成功解析！標準代碼: {ticker} | 市場區域: {region_code} | 公司名稱: {display_name}")
     
     # 2. Fetch latest macro & reflection context
     print_info("正在自資料庫加載最新宏觀經濟情境與歷史反思指令...")
@@ -900,7 +945,7 @@ def run_realtime_query(query_str: str, track_option: bool, report_date: str):
     # 4. NewsAgent Analysis
     print_info("消息面催化劑分析中...")
     news_agent = NewsAgent()
-    news_analysis = news_agent.analyze(ticker, company_name, stock_news)
+    news_analysis = news_agent.analyze(ticker, display_name, stock_news)
     time.sleep(2)
     
     # 5. Fetch quantitative financials
@@ -925,7 +970,7 @@ def run_realtime_query(query_str: str, track_option: bool, report_date: str):
 【前期歷史回測之自我修正指令】：
 {reflection_directives}
 """
-    stock_report = fundamental_agent.analyze(ticker, company_name, financials, news_analysis, combined_context)
+    stock_report = fundamental_agent.analyze(ticker, display_name, financials, news_analysis, combined_context)
     time.sleep(2)
     
     # 7. Parse output parameters
@@ -978,7 +1023,17 @@ def run_realtime_query(query_str: str, track_option: bool, report_date: str):
         target_p_display = "N/A"
         stop_l_display = "N/A"
     else:
-        buy_range_display = f"{curr_price * 0.98:.2f} - {curr_price * 1.02:.2f} {currency}"
+        # Try to extract buy range from text dynamically
+        parsed_range = None
+        for line in lines:
+            if "推薦買入區間" in line or "買入區間" in line:
+                parsed_range = extract_range_from_line(line, curr_price)
+                break
+        if parsed_range:
+            buy_range_display = f"{parsed_range} {currency}"
+        else:
+            buy_range_display = f"{curr_price * 0.98:.2f} - {curr_price * 1.02:.2f} {currency}"
+            
         target_p_display = f"{target_p:.2f} {currency}"
         stop_l_display = f"{stop_l:.2f} {currency}"
         
@@ -990,7 +1045,7 @@ def run_realtime_query(query_str: str, track_option: bool, report_date: str):
     table_rows = [
         ("國家區域", region_display),
         ("標的代碼", ticker),
-        ("企業名稱", company_name),
+        ("企業名稱", display_name),
         ("推薦評級", rating),
         ("即時現價", f"{curr_price:.2f} {currency}"),
         ("推薦買入區間", buy_range_display),
