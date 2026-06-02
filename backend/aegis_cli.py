@@ -777,17 +777,277 @@ def evolve_active_prompts():
     except Exception as ex:
         print_warning(f"[自適應 Prompt 演化] 執行過程中發生異常，跳過本次 Prompt 演化: {ex}")
 
+def resolve_ticker_and_region_via_llm(query_str: str) -> tuple:
+    """
+    Uses a quick LLM call to resolve name or ticker to (standard_ticker, region_code, company_name).
+    Returns (None, None, None) if unresolved.
+    """
+    import json
+    from core.agents.base_agent import BaseAgent
+    resolver = BaseAgent(
+        name="TickerResolver",
+        role="Financial Ticker Translator",
+        system_instruction=(
+            "You are a financial database utility. Your job is to translate a user's input (stock name, Chinese name, or ticker) "
+            "into standard format: standard Yahoo Finance ticker, region code ('US' or 'Taiwan'), and English official company name. "
+            "Format your response strictly as a JSON object: {\"ticker\": \"...\", \"region\": \"...\", \"company_name\": \"...\"}. "
+            "No markdown formatting, no code block backticks, no explanations. Just raw JSON."
+        )
+    )
+    try:
+        resp = resolver.run(f"Translate this input: {query_str}")
+        clean_resp = resp.strip()
+        if clean_resp.startswith("```"):
+            lines = clean_resp.splitlines()
+            if lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].startswith("```"):
+                lines = lines[:-1]
+            clean_resp = "\n".join(lines).strip()
+        data = json.loads(clean_resp)
+        return data.get("ticker"), data.get("region"), data.get("company_name")
+    except Exception as e:
+        print(f"[!] Ticker resolution error: {e}")
+        return None, None, None
+
+def get_latest_regime_and_reflection(region: str) -> tuple:
+    """
+    Queries the MySQL/SQLite database to fetch the latest Macro Report, Market Regime, and Reflection Directives.
+    """
+    import re
+    with db.db_session() as conn:
+        cursor = conn.cursor()
+        region_term = "台股" if region != "US" else "美股"
+        
+        # 1. Fetch latest MacroAgent log for this region
+        db.execute_sql(cursor,
+            "SELECT output_response FROM agent_inference_logs WHERE agent_name = 'MacroAgent' AND input_prompt LIKE ? ORDER BY id DESC LIMIT 1",
+            "SELECT output_response FROM agent_inference_logs WHERE agent_name = 'MacroAgent' AND input_prompt LIKE %s ORDER BY id DESC LIMIT 1",
+            (f"%{region_term}%",)
+        )
+        macro_row = cursor.fetchone()
+        macro_report = ""
+        if macro_row:
+            if isinstance(macro_row, dict):
+                macro_report = macro_row.get("output_response", "")
+            else:
+                macro_report = macro_row[0]
+        else:
+            macro_report = "（無可用宏觀經濟分析資料，預設為多頭情境）"
+        
+        # Extract regime
+        regime_match = re.search(r"\[MARKET_REGIME:\s*(BULL_RISK_ON|BEAR_RISK_OFF|VOLATILE_RANGEBOUND)\]", macro_report)
+        market_regime = regime_match.group(1) if regime_match else "BULL_RISK_ON"
+        macro_report_cleaned = re.sub(r"\[MARKET_REGIME:\s*(BULL_REGIME|BULL_RISK_ON|BEAR_RISK_OFF|VOLATILE_RANGEBOUND)\]\s*", "", macro_report)
+        
+        # 2. Fetch latest ReflectionAgent log for this region
+        db.execute_sql(cursor,
+            "SELECT output_response FROM agent_inference_logs WHERE agent_name = 'ReflectionAgent' AND input_prompt LIKE ? ORDER BY id DESC LIMIT 1",
+            "SELECT output_response FROM agent_inference_logs WHERE agent_name = 'ReflectionAgent' AND input_prompt LIKE %s ORDER BY id DESC LIMIT 1",
+            (f"%{region_term}%",)
+        )
+        ref_row = cursor.fetchone()
+        reflection_directives = ""
+        if ref_row:
+            if isinstance(ref_row, dict):
+                reflection_directives = ref_row.get("output_response", "")
+            else:
+                reflection_directives = ref_row[0]
+        else:
+            reflection_directives = "（本區域目前尚無歷史交易紀錄，暫無自我反思修正指令。請採用標準安全邊際進行基本面估值。）"
+        
+        return macro_report_cleaned, market_regime, reflection_directives
+
+def run_realtime_query(query_str: str, track_option: bool, report_date: str):
+    """
+    Runs a real-time investment analysis query for a single ticker/name and optionally tracks it.
+    """
+    print_success("==================================================")
+    print_success(f"🔍 Aegis-MAQS 即時個股分析與決策查詢啟動：'{query_str}'")
+    print_success("==================================================")
+    
+    # 1. Resolve ticker
+    print_info("正在解析標的名稱與交易所代碼...")
+    ticker, region_code, company_name = resolve_ticker_and_region_via_llm(query_str)
+    if not ticker or not region_code:
+        print_error(f"無法解析此標的：'{query_str}'，請確認輸入是否正確。")
+        return
+        
+    print_success(f"成功解析！標準代碼: {ticker} | 市場區域: {region_code} | 公司名稱: {company_name}")
+    
+    # 2. Fetch latest macro & reflection context
+    print_info("正在自資料庫加載最新宏觀經濟情境與歷史反思指令...")
+    macro_report, market_regime, reflection_directives = get_latest_regime_and_reflection(region_code)
+    print_success(f"當前大盤市場情境標籤：{market_regime}")
+    
+    # 3. Fetch news
+    print_info(f"正在檢索 {ticker} 的個股消息與社群輿情...")
+    stock_news = search_tool.get_stock_news(ticker, max_items=5)
+    
+    # 4. NewsAgent Analysis
+    print_info("消息面催化劑分析中...")
+    news_agent = NewsAgent()
+    news_analysis = news_agent.analyze(ticker, company_name, stock_news)
+    time.sleep(2)
+    
+    # 5. Fetch quantitative financials
+    print_info(f"正在抓取 {ticker} 的量化財務指標與波動率參數...")
+    financials = yf_tool.get_stock_financials(ticker)
+    if not financials:
+        print_error(f"無法取得 {ticker} 的財務與估值指標，分析中斷。")
+        return
+        
+    curr_price = financials.get("current_price", 0.0)
+    if curr_price == 0.0:
+        print_error(f"無法獲取 {ticker} 的即時交易市價，分析中斷。")
+        return
+        
+    # 6. Fundamental Agent Analysis
+    print_info("個股估值與決策修正分析中...")
+    fundamental_agent = FundamentalAgent()
+    combined_context = f"""
+【當前巨觀經濟環境】：
+{macro_report}
+
+【前期歷史回測之自我修正指令】：
+{reflection_directives}
+"""
+    stock_report = fundamental_agent.analyze(ticker, company_name, financials, news_analysis, combined_context)
+    time.sleep(2)
+    
+    # 7. Parse output parameters
+    target_p = curr_price * 1.15
+    stop_l = curr_price * 0.92
+    rating = "Buy"
+    suggested_weight = None
+    
+    lines = stock_report.split("\n")
+    for line in lines:
+        if "目標價" in line or "中線目標價" in line:
+            parsed_val = extract_price_from_line(line, curr_price)
+            if parsed_val > 0.0: target_p = parsed_val
+        elif "停損點" in line or "防禦停損點" in line:
+            parsed_val = extract_price_from_line(line, curr_price)
+            if parsed_val > 0.0: stop_l = parsed_val
+        elif "投資評級" in line:
+            if "Strong Buy" in line or "強烈買入" in line: rating = "Strong Buy"
+            elif "Hold" in line or "持有" in line: rating = "Hold"
+        elif "建議持倉權重" in line or "持倉權重" in line or "建議權重" in line:
+            import re
+            weight_match = re.search(r"(\d+(?:\.\d+)?)\s*%", line)
+            if weight_match:
+                try:
+                    suggested_weight = float(weight_match.group(1)) / 100.0
+                except ValueError:
+                    pass
+
+    if suggested_weight is None or suggested_weight <= 0.0:
+        if rating == "Strong Buy": suggested_weight = 0.25
+        elif rating == "Buy": suggested_weight = 0.15
+        elif rating == "Hold": suggested_weight = 0.05
+        else: suggested_weight = 0.10
+        
+    # Determine currency
+    currency = "USD" if region_code == "US" else "TWD"
+    region_display = "美股 (US)" if region_code == "US" else "台股 (Taiwan)"
+    
+    # 8. Beautiful ASCII output table
+    print_success("\n" + "="*50)
+    print_success("📈 Aegis-MAQS 智慧決策操作指南對帳單")
+    print_success("="*50)
+    
+    table_rows = [
+        ("國家區域", region_display),
+        ("標的代碼", ticker),
+        ("企業名稱", company_name),
+        ("推薦評級", rating),
+        ("即時現價", f"{curr_price:.2f} {currency}"),
+        ("推薦買入區間", f"{curr_price * 0.98:.2f} - {curr_price * 1.02:.2f} {currency}"),
+        ("中線目標價", f"{target_p:.2f} {currency}"),
+        ("防禦停損點", f"{stop_l:.2f} {currency}"),
+        ("建議持倉權重", f"{suggested_weight * 100:.1f}%")
+    ]
+    
+    for key, val in table_rows:
+        print(f"  • {key.ljust(10, '　')}: {val}")
+        
+    print_success("="*50)
+    print("\n💡 【深度定性基本面分析與催化劑評估】：")
+    print(stock_report)
+    
+    # 9. Track recommendation if option selected
+    if track_option:
+        if rating not in ["Buy", "Strong Buy"]:
+            print_warning(f"\n[⚠️ 追蹤警告] 標的 {ticker} 推薦評級為 {rating}，未達 Buy/Strong Buy 買入標準，不予寫入持股追蹤帳本。")
+            return
+            
+        print_info(f"\n正在為 {ticker} 進行預算分配與實戰追蹤寫入...")
+        try:
+            from core.agents.budget_agent import BudgetAgent
+            budget_agent = BudgetAgent()
+            invested_amount, shares = budget_agent.allocate_budget(ticker, region_code, curr_price, custom_weight=suggested_weight)
+            
+            rec_id = db.save_recommendation(
+                report_date=report_date,
+                region=region_code,
+                ticker=ticker,
+                company_name=company_name,
+                recommend_price=curr_price,
+                recommend_reason=f"Aegis-MAQS 即時查詢注入追蹤。當前市場情境: {market_regime}。",
+                target_price=target_p,
+                stop_loss=stop_l,
+                rating=rating,
+                invested_amount=invested_amount,
+                shares=shares
+            )
+            
+            if invested_amount > 0.0:
+                budget_agent.record_purchase(rec_id, ticker, region_code, curr_price, invested_amount, shares)
+                
+            # Log inferences
+            try:
+                db.save_agent_inference_log(
+                    rec_id=rec_id,
+                    agent_name="FundamentalAgent",
+                    ticker=ticker,
+                    input_prompt=fundamental_agent.last_prompt,
+                    output_response=stock_report,
+                    prompt_version=fundamental_agent.prompt_version
+                )
+                db.save_agent_inference_log(
+                    rec_id=rec_id,
+                    agent_name="NewsAgent",
+                    ticker=ticker,
+                    input_prompt=news_agent.last_prompt,
+                    output_response=news_analysis,
+                    prompt_version=news_agent.prompt_version
+                )
+            except Exception as log_ex:
+                print(f"[!] Warning: 記錄推論日誌失敗: {log_ex}")
+                
+            print_success(f"🎉 標的 {ticker} 已成功寫入 MySQL 並開始追蹤！(分配預算: {invested_amount:.2f} | 股數: {shares:.2f})")
+            print_success("💡 提示：本標的將在明天的 17:00 全自動納入每日持股對帳、風控停損與 HTML 看板中！")
+            
+        except Exception as track_ex:
+            print_error(f"追蹤寫入失敗: {track_ex}")
+
 def main():
-    parser = argparse.ArgumentParser(description="投資研究代理人系統 - 本地測試與執行工具 (CLI)")
+    parser = argparse.ArgumentParser(description="Aegis-MAQS 投資研究代理人群系統 - 本地端執行與個股即時查詢工具 (CLI)")
     parser.add_argument("--regions", nargs="+", default=["US", "Taiwan"], help="指定要分析的國家區域，例如 US Taiwan")
     parser.add_argument("--date", default=datetime.now().strftime("%Y-%m-%d"), help="指定週報產出日期 (YYYY-MM-DD)")
     parser.add_argument("--force", action="store_true", help="強制重新執行並覆蓋當日已有的報告")
     parser.add_argument("--test-prompt-evolution", action="store_true", help="測試自適應 Prompt 演化引擎（注入模擬交易數據進行演化測試）")
+    parser.add_argument("--query", type=str, help="即時個股分析與操作建議查詢 (支援個股代號或中文名稱，如 '2330.TW'、'鴻海')")
+    parser.add_argument("--track", action="store_true", help="與 --query 搭配使用，若推薦評級為 Buy/Strong Buy，自動將該標的納入實戰持股追蹤與每日風控哨兵對帳")
     
     args = parser.parse_args()
     report_date = args.date
     regions_list = args.regions
     
+    if args.query:
+        run_realtime_query(args.query, args.track, report_date)
+        sys.exit(0)
+        
     if args.test_prompt_evolution:
         print_info("⚡ 已啟動自適應 Prompt 演化引擎的測試模式...")
         try:
