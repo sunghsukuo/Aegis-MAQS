@@ -29,7 +29,7 @@ class MarketAgent(BaseAgent):
             system_instruction=SYSTEM_INSTRUCTION
         )
 
-    def analyze(self, region_name: str, sector_rankings: list) -> str:
+    def analyze(self, region_name: str, sector_rankings: list, sector_news: list = None) -> str:
         """Executes the sector ranking and money flow analysis."""
         formatted_sectors = ""
         date_range_info = ""
@@ -42,6 +42,15 @@ class MarketAgent(BaseAgent):
         for i, sec in enumerate(sector_rankings):
             formatted_sectors += f"{i+1}. Ticker: {sec['ticker']} | 名稱: {sec['label']} | 週報酬率: {sec['weekly_return']*100:.2f}% | 收盤價: {sec['current_price']:.2f}\n"
             
+        formatted_news = ""
+        if sector_news:
+            formatted_news += "\n【當週最強勢板塊相關產業新聞與動態】：\n"
+            for i, art in enumerate(sector_news):
+                formatted_news += f"新聞 {i+1}: {art['title']}\n   發布時間: {art['pub_date']}\n"
+                if art.get('summary') and art['summary'].strip():
+                    formatted_news += f"   摘要: {art['summary']}\n"
+                formatted_news += "\n"
+        
         prompt = f"""
 請針對【{region_name}】的產業板塊數據進行深度分析，找出資金流向與黃金版塊。
 
@@ -49,7 +58,8 @@ class MarketAgent(BaseAgent):
 
 【產業板塊週表現數據】：
 {formatted_sectors if formatted_sectors else "（暫無相關板塊數據）"}
+{formatted_news}
 
-請依據上述真實市場數據進行排行與邏輯解讀，並指引本週最看好的 2 大深挖產業主題。
+請依據上述真實市場數據與行業動態進行排行與邏輯解讀，並指引本週最看好的 2 大深挖產業主題。
 """
         return self.run(prompt)

@@ -15,10 +15,10 @@ class BudgetAgent:
     - 管理交易紀錄 (Transaction History) 與雙向簿記 (Double-Entry Bookkeeping) 資金流轉。
     """
     
-    def __init__(self, allocation_ratio: float = 0.15):
+    def __init__(self, allocation_ratio: float = 0.10):
         """
         初始化預算管理代理人。
-        :param allocation_ratio: 預設單次交易佔可用資金的比例 (15%)，用於風險控管與部位控制。
+        :param allocation_ratio: 預設單次交易佔可用資金的比例 (10%)，用於風險控管與部位控制。
         """
         self.allocation_ratio = allocation_ratio
 

@@ -9,6 +9,9 @@ SYSTEM_INSTRUCTION = """
 3. 對每一項關鍵事件評定「消息面情緒」（強烈看多/看多/中立/看空/強烈看空），並說明其屬於「短線衝擊」還是「長線趨勢改變」。
 4. 給予該標的整體的消息面綜合評級（Bullish, Neutral, or Bearish），並說明這如何影響其目前的投資價值或風險。
 
+【重要防禦原則 - 雜訊深度過濾】：
+在進行解析時，你必須排除任何「個人心情分享」、「論壇討論心得（如 PTT/Dcard 的鄉民發文）」、「純情緒性宣洩」或「非客觀商業事實之八卦」。你只能專注於有客觀財經數據、公司官方公告、權威媒體報導支撐的「實質催化事件」（例如：法說會展望、產能變化、營收數據、產業重大變局等）。
+
 請務必使用「繁體中文（台灣習慣財經用語）」撰寫，產出一份專業的「重大消息與新聞催化解析報告」。
 
 輸出格式請依照以下 Markdown 結構：
@@ -32,7 +35,10 @@ class NewsAgent(BaseAgent):
         """Executes the news and catalyst analysis for a specific stock/ETF."""
         formatted_news = ""
         for i, art in enumerate(news_data):
-            formatted_news += f"新聞 {i+1}: {art['title']}\n   發布時間: {art['pub_date']}\n   摘要: {art['summary']}\n\n"
+            formatted_news += f"新聞 {i+1}: {art['title']}\n   發布時間: {art['pub_date']}\n"
+            if art.get('summary') and art['summary'].strip():
+                formatted_news += f"   摘要: {art['summary']}\n"
+            formatted_news += "\n"
             
         prompt = f"""
 請針對標的【{company_name} ({ticker})】最新的重大消息與新聞進行深度催化劑分析。

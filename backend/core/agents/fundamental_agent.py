@@ -39,7 +39,8 @@ class FundamentalAgent(BaseAgent):
         )
 
     def analyze(self, ticker: str, company_name: str, financials: dict, news_analysis: str, macro_context: str) -> str:
-        """Executes the fundamental valuation and investment recommendation for an asset."""
+        """Executes the fundamental valuation and investment recommendation for an asset, automatically routing between stock and ETF templates."""
+        import math
         
         # Build prompt formatting key metrics safely
         def safe_fmt(val, prefix="", suffix="", placeholder="N/A"):
@@ -53,10 +54,69 @@ class FundamentalAgent(BaseAgent):
                 return f"{prefix}{val:,.2f}"
             return f"{prefix}{val}{suffix}"
 
-        prompt = f"""
+        is_etf = financials.get("is_etf_proxy", False)
+        
+        # Calculate dynamic volatility stops based on Beta-adjusted ATR
+        curr_price = financials.get("current_price", 0.0)
+        atr_14 = financials.get("atr_14")
+        beta = financials.get("beta", 1.0)
+        
+        # Adjust stop/target multipliers using square root of Beta for statistical scaling
+        beta_adj = math.sqrt(max(0.3, min(beta, 3.0)))
+        k1 = 2.0 * beta_adj
+        k2 = 3.0 * beta_adj
+        
+        suggested_sl = curr_price - (k1 * atr_14) if (atr_14 and curr_price) else curr_price * 0.92
+        suggested_tp = curr_price + (k2 * atr_14) if (atr_14 and curr_price) else curr_price * 1.15
+
+        if is_etf:
+            prompt = f"""
+【重要指令變更】：此標的為 ETF（指數股票型基金），而非單一個股。請你以「大類資產配置與技術動能分析師」的角色進行評估。
+你不需要分析個股財務結構（如 ROE、FCF、PEG 等），請專注於此 ETF 的「技術面均線系統（SMA/RSI/MACD）」、「產業/板塊巨觀景氣與新聞催化劑」以及「資產規模與配息率」進行估值。
+
+請為標的【{company_name} ({ticker})】進行深度 ETF 技術估值與投資價值評估。
+
+【標的基本資料與技術指標數據】：
+* 標的代碼: {ticker}
+* 標的全名: {company_name}
+* 當前價格: {safe_fmt(financials.get('current_price'))}
+* 資產規模 (AUM): {safe_fmt(financials.get('total_assets'))}
+* 配息率/收益率: {safe_fmt(financials.get('dividend_yield'), suffix="%")}
+* 折溢價/淨值價 (NAV): {safe_fmt(financials.get('nav_price'))}
+* 20天均線 (20-day SMA): {safe_fmt(financials.get('sma_20'))}
+* 50天均線 (50-day SMA): {safe_fmt(financials.get('fifty_day_sma'))}
+* 200天均線 (200-day SMA): {safe_fmt(financials.get('two_hundred_day_sma'))}
+* 14天強弱指標 (RSI-14): {safe_fmt(financials.get('rsi_14'))} (注意：低於 30 為超賣，高於 70 為超買)
+* 分析師共識建議: {safe_fmt(financials.get('recommendation_consensus'))}
+
+【該產業/板塊最新的新聞與重大消息面分析】：
+{news_analysis}
+
+【當前大市場總體經濟環境脈絡】：
+{macro_context}
+
+請綜合上述的所有技術量化指標與行業定性脈絡，撰寫出一份極致專業的「ETF 板塊技術估值報告」與「明確操作指引」。
+
+輸出格式請嚴格依照以下 Markdown 結構：
+### 📊 [{company_name} / {ticker}] 板塊技術估值與投資價值評估
+* **投資評級與核心論點**：[強烈買入 Strong Buy / 買入 Buy / 持有 Hold] (請附帶一句話最核心的板塊輪動與技術面核心投資亮點)
+* **基本面與技術面關鍵指標深度剖析**：
+  * *行業景氣與資金流向*：[分析該產業/板塊在當前總經環境下的發展空間與資金流入熱度]
+  * *技術指標與動能評估*：[分析目前價格相對於 20MA、50MA、200MA 的均線位階，以及 RSI 狀態，判斷是否處於多頭強勢或超跌區]
+  * *ETF 規模與配息健康度*：[分析 AUM 與配息率，評估流動性與持倉穩定度]
+* **結合總經與消息面的綜合評語**：[結合當前宏觀政策與產業重大消息，說明該板塊有何天時地利]
+* **具體投資操作指南**：
+  * **當前價格**：{safe_fmt(financials.get('current_price'))}
+  * **推薦買入區間**：[給出合理的買入區間，如 140 - 145 元]
+  * **中線目標價**：[根據技術排列與上檔壓力算出的合理中線目標價]
+  * **防禦停損點**：[根據均線支撐或前波低點設定的防禦停損位]
+  * **建議持倉權重**：[例如：適中佔比 10%、加碼配置 15% 等]
+"""
+        else:
+            prompt = f"""
 請為標的【{company_name} ({ticker})】進行深度基本面財務估值與投資價值評估。
 
-【標的財務基本面數據】：
+【標的財務基本面與波動風控數據】：
 * 股票代碼: {ticker}
 * 企業全名: {company_name}
 * 當前股價: {safe_fmt(financials.get('current_price'))}
@@ -75,6 +135,16 @@ class FundamentalAgent(BaseAgent):
 * 50天均線 (50-day SMA): {safe_fmt(financials.get('fifty_day_sma'))}
 * 200天均線 (200-day SMA): {safe_fmt(financials.get('two_hundred_day_sma'))}
 * 分析師共識建議: {safe_fmt(financials.get('recommendation_consensus'))}
+* 14天真實波動均值 (ATR-14): {safe_fmt(atr_14)}
+* 大盤敏感度 (Beta): {safe_fmt(beta)}
+* 系統建議波動停損價: {safe_fmt(suggested_sl)} (買入價 - {k1:.2f} * ATR，已結合 Beta 微調)
+* 系統建議波動停利價: {safe_fmt(suggested_tp)} (買入價 + {k2:.2f} * ATR，已結合 Beta 微調)
+
+【重要指令變更 - 波動度風控要求】：
+本系統已全面導入 ATR 與 Beta 波動度風控限制。請你在撰寫最後的「具體投資操作指南」時：
+1. 務必優先參考系統建議的波動停損價與停利價。
+2. 若無極其強烈之基本面/消息面重大催化劑理由，請直接採用系統建議的波動停損價與停利價，或在其上下 1.5% 的極小範圍內微調。
+3. 務必在你的操作指南中，明確點出你是採用了幾倍的 ATR（例如：目標價採 +{k2:.2f} 倍 ATR，停損點採 -{k1:.2f} 倍 ATR）作為設定依據。
 
 【該標的最新的新聞與重大消息面分析】：
 {news_analysis}

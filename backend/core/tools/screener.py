@@ -60,9 +60,7 @@ class QuantScreener:
             # Smart automatic classifier for regional sector proxies
             resolved_key = None
             
-            # Prioritize matching against custom individual stock sector proxies (e.g. 2881.TW, 2330.TW, 1301.TW)
-            # to avoid false matching on broad market indices (e.g. 0050.TW) which contain almost all stocks.
-            custom_proxy_keys = ["2881.TW", "2330.TW", "1301.TW"]
+            custom_proxy_keys = ["2881.TW", "1301.TW"]
             for key in custom_proxy_keys:
                 if key in ETF_CONSTITUENTS_CACHE and etf_ticker in ETF_CONSTITUENTS_CACHE[key]:
                     resolved_key = key
@@ -151,10 +149,11 @@ class QuantScreener:
         # Standard fallback on any error: return today's volume as-is
         return float(hist["Volume"].iloc[-1])
 
-    def screen_stocks(self, etf_ticker: str, region: str, limit: int = 5) -> list:
+    def screen_stocks(self, etf_ticker: str, region: str, limit: int = 5, market_regime: str = None) -> list:
         """
         Calculates 5-day return momentum, volume surge factor, and applies liquidity/trend filters
-        to dynamically select the top 'limit' candidates from the ETF's constituents.
+        to dynamically select the top 'limit' candidates from the ETF's constituents, adapting
+        the factor weights and applying volatility penalties based on the macro market regime.
         """
         tickers = self.fetch_etf_constituents(etf_ticker)
         if not tickers:
@@ -220,8 +219,26 @@ class QuantScreener:
                 # Volume spike is capped at 3x for scoring stability
                 volume_score = min(volume_spike, 3.0) / 3.0 * 10.0
                 
-                # Formula: 70% Momentum (Alpha) + 30% Volume Spike (Institutional footprint)
-                combined_score = (return_score * 0.7) + (volume_score * 0.3)
+                # Dynamic scoring based on Market Regime for Adaptive Risk Management!
+                if market_regime == "BEAR_RISK_OFF":
+                    # Bear Market: Prioritize institutional accumulation (Volume Spike) over momentum, and penalize high volatility
+                    daily_returns = hist["Close"].pct_change()
+                    daily_vol = float(daily_returns.iloc[-20:].std() * 100)
+                    if pd.isna(daily_vol): 
+                        daily_vol = 0.0
+                    vol_penalty = min(daily_vol * 1.5, 5.0)
+                    combined_score = (return_score * 0.3) + (volume_score * 0.7) - vol_penalty
+                elif market_regime == "VOLATILE_RANGEBOUND":
+                    # Rangebound: Balanced momentum & volume, with a moderate volatility penalty
+                    daily_returns = hist["Close"].pct_change()
+                    daily_vol = float(daily_returns.iloc[-20:].std() * 100)
+                    if pd.isna(daily_vol): 
+                        daily_vol = 0.0
+                    vol_penalty = min(daily_vol * 0.75, 2.5)
+                    combined_score = (return_score * 0.5) + (volume_score * 0.5) - vol_penalty
+                else:
+                    # Bull Market / Default: Heavy momentum chasing (Alpha-seeking)
+                    combined_score = (return_score * 0.7) + (volume_score * 0.3)
                 
                 screened_results.append({
                     "ticker": ticker,
@@ -245,12 +262,48 @@ class QuantScreener:
         for i, pick in enumerate(final_picks, 1):
             print(f"    {i}. {pick['name']} ({pick['ticker']}) - 5日漲幅: {pick['weekly_return']*100:.2f}%, 量能增幅: {pick['volume_spike']:.2f}x, 評分: {pick['score']:.2f}")
             
+        # Calculate ETF's own weekly return for comparative reporting in section headers
+        etf_weekly_return = 0.0
+        try:
+            etf_ticker_obj = yf.Ticker(etf_ticker)
+            etf_hist = etf_ticker_obj.history(period="1mo")
+            if not etf_hist.empty and len(etf_hist) >= 6:
+                etf_close_now = etf_hist["Close"].iloc[-1]
+                etf_close_5d_ago = etf_hist["Close"].iloc[-6]
+                etf_weekly_return = float((etf_close_now - etf_close_5d_ago) / etf_close_5d_ago)
+        except Exception as e:
+            print(f"[!] 計算 ETF {etf_ticker} 自身週報酬率失敗: {e}")
+
         self.session_history.append({
             "etf": etf_ticker,
             "region": region,
-            "picks": final_picks
+            "picks": final_picks,
+            "weekly_return": etf_weekly_return
         })
         return final_picks
+
+    def record_proxy_etf(self, etf_ticker: str, region: str, financials: dict = None, weekly_return: float = 0.0):
+        """
+        Records a proxy ETF selection along with its quantitative and technical features
+        into the session history for high-fidelity reporting.
+        """
+        etf_ticker = etf_ticker.strip().upper()
+        name = etf_ticker
+        try:
+            name = yf.Ticker(etf_ticker).info.get("longName", etf_ticker)
+        except Exception:
+            pass
+            
+        self.session_history.append({
+            "etf": etf_ticker,
+            "name": name,
+            "region": region,
+            "is_proxy": True,
+            "picks": [],
+            "financials": financials,
+            "weekly_return": weekly_return
+        })
+        print(f"[✓] [Screener] 已成功將 ETF 代理標的 {etf_ticker} (含技術/定量特徵) 寫入選股報告記錄。")
 
     def generate_report(self, report_date: str) -> tuple:
         """
@@ -284,46 +337,105 @@ class QuantScreener:
             etf = item["etf"]
             region = item["region"]
             picks = item["picks"]
+            is_proxy = item.get("is_proxy", False)
+            weekly_return = item.get("weekly_return", 0.0) * 100
             
-            if not picks:
+            if not picks and not is_proxy:
                 continue
                 
             region_lbl = "美股" if region == "US" else "台股"
             if not is_zh:
                 region_lbl = "US Market" if region == "US" else "Taiwan Market"
                 
-            lines.append(f"\n### 🔍 焦點行業板塊 ETF：{etf} ({region_lbl})\n")
-            
-            # Draw Table
-            if is_zh:
-                lines.append("| 排名 | 標的代碼 | 企業名稱 | 當前價格 | 5日漲跌幅 | 成交量增幅 | 量化評分 | 市值 |")
-                lines.append("| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |")
-            else:
-                lines.append("| Rank | Ticker | Company Name | Price | 5-Day Return | Vol Spike | Quant Score | Market Cap |")
-                lines.append("| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |")
+            if is_proxy:
+                # Render a beautiful explanatory box and a quantitative characteristics table!
+                etf_name = item.get("name", etf)
+                f_data = item.get("financials") or {}
                 
-            for idx, pick in enumerate(picks, 1):
-                ticker = pick["ticker"]
-                name = pick["name"]
-                price = pick["current_price"]
-                ret = pick["weekly_return"] * 100
-                spike = pick["volume_spike"]
-                score = pick["score"]
-                mcap = pick["market_cap"]
+                # Format quantitative fields safely
+                def f_val(key, suffix="", prefix="", divisor=1.0, fmt=".2f"):
+                    val = f_data.get(key)
+                    if val is None:
+                        return "N/A"
+                    if isinstance(val, (int, float)):
+                        return f"{prefix}{val / divisor:{fmt}}{suffix}"
+                    return f"{prefix}{val}{suffix}"
                 
-                # Format Market Cap
-                if mcap >= 10**12:
-                    mcap_str = f"{mcap / 10**12:.2f}T"
-                elif mcap >= 10**9:
-                    mcap_str = f"{mcap / 10**9:.2f}B"
-                else:
-                    mcap_str = f"{mcap / 10**6:.2f}M"
-                    
                 price_symbol = "$" if region == "US" else "NT$"
                 
-                lines.append(f"| {idx} | `{ticker}` | {name} | {price_symbol}{price:.2f} | {ret:+.2f}% | {spike:.2f}x | {score:.2f} | {mcap_str} |")
-                
-            lines.append("\n---")
+                if is_zh:
+                    lines.append(f"\n### 🔍 焦點行業板塊 ETF：{etf_name} ({etf}) ({region_lbl}) - 本週報酬率: {weekly_return:+.2f}% - 【直接投資 ETF 模式】\n")
+                    lines.append("> [!IMPORTANT]\n"
+                                 f"> 本板塊在第一階段量化動能篩選中成功被評選為**當週最強勢焦點板塊**。\n"
+                                 "> \n"
+                                 f"> 依據系統配置，此板塊投資策略設定為 **`proxy` (直接投資 ETF 本身)** 模式。系統已跳過底層成分股量化篩選，直接調度 **總經分析師** 與 **技術動能分析師** 對該 ETF 本身進行評估與持倉分配。\n")
+                    
+                    # Add Quantitative Table
+                    lines.append("\n#### 📊 ETF 特徵與技術指標定量分析")
+                    lines.append("| 指標名稱 | 數值 / 位階 | 財務與技術意義解讀 |")
+                    lines.append("| :--- | :--- | :--- |")
+                    lines.append(f"| **當前交易現價** | {price_symbol}{f_val('current_price')} | ETF 目前在次級市場之最新成交價格。 |")
+                    lines.append(f"| **5日動能回報** | {weekly_return:+.2f}% | 反映過去 5 個交易日之強勢資金推升力道。 |")
+                    lines.append(f"| **資產管理規模 (AUM)** | {f_val('total_assets', divisor=10**9, suffix=' B')} | 代表此 ETF 之市場流動性與防禦深度。 |")
+                    lines.append(f"| **配息率 / 收益率** | {f_val('dividend_yield', suffix='%', divisor=0.01)} | 提供穩健持股之防守現金流回報。 |")
+                    lines.append(f"| **淨值價 (NAV)** | {price_symbol}{f_val('nav_price')} | ETF 本身代表的實際底層裝產價值。 |")
+                    lines.append(f"| **14天強弱指標 (RSI)** | {f_val('rsi_14', fmt='.1f')} | 判定目前動能位階（低於 30 為超賣，高於 70 為超買）。 |")
+                    lines.append(f"| **20日均線 (20MA)** | {price_symbol}{f_val('sma_20')} | 短期生命線（現價高於 20MA 代表短線多頭確立）。 |")
+                    lines.append(f"| **50日均線 (50MA)** | {price_symbol}{f_val('fifty_day_sma')} | 中期季線位階（確認中線波段防禦支撐點）。 |")
+                    lines.append(f"| **200日均線 (200MA)** | {price_symbol}{f_val('two_hundred_day_sma')} | 長期牛熊分界線（提供極強的長線牛市安全邊際）。 |")
+                else:
+                    lines.append(f"\n### 🔍 Focus Sector ETF: {etf_name} ({etf}) ({region_lbl}) - Weekly Return: {weekly_return:+.2f}% - [Direct ETF Mode]\n")
+                    lines.append("> [!IMPORTANT]\n"
+                                 f"> This sector was successfully selected as one of the **strongest performing focus sectors of the week** during the first-stage quantitative momentum screening.\n"
+                                 "> \n"
+                                 f"> According to the system configuration, the investment strategy for this sector is set to **`proxy` (Direct ETF Investment)**. The system bypassed quantitative screening of individual constituent stocks and directly routed to **Macro & Technical Dynamic Analysts** to evaluate and allocate budget for the ETF itself.\n")
+                    
+                    # Add Quantitative Table
+                    lines.append("\n#### 📊 ETF Quantitative & Technical Characteristics")
+                    lines.append("| Metric | Value | Financial & Technical Significance |")
+                    lines.append("| :--- | :--- | :--- |")
+                    lines.append(f"| **Current Price** | {price_symbol}{f_val('current_price')} | Live secondary market trading price. |")
+                    lines.append(f"| **5-Day Momentum** | {weekly_return:+.2f}% | Reflects short-term institutional momentum strength. |")
+                    lines.append(f"| **Assets Under Management (AUM)** | {f_val('total_assets', divisor=10**9, suffix=' B')} | Indicates liquidity and market capital depth. |")
+                    lines.append(f"| **Dividend Yield** | {f_val('dividend_yield', suffix='%', divisor=0.01)} | Standard dividend-paying defensive return rate. |")
+                    lines.append(f"| **NAV Price** | {price_symbol}{f_val('nav_price')} | Net Asset Value representing underlying holdings. |")
+                    lines.append(f"| **14-Day RSI** | {f_val('rsi_14', fmt='.1f')} | Identifies technical momentum level (<30 Oversold, >70 Overbought). |")
+                    lines.append(f"| **20-Day SMA** | {price_symbol}{f_val('sma_20')} | Short-term trend confirmation baseline. |")
+                    lines.append(f"| **50-Day SMA** | {price_symbol}{f_val('fifty_day_sma')} | Mid-term wave support price level. |")
+                    lines.append(f"| **200-Day SMA** | {price_symbol}{f_val('two_hundred_day_sma')} | Long-term bull/bear baseline. |")
+                lines.append("\n---")
+            else:
+                if is_zh:
+                    lines.append(f"\n### 🔍 焦點行業板塊 ETF：{etf} ({region_lbl}) - 本週報酬率: {weekly_return:+.2f}%\n")
+                    lines.append("| 排名 | 標的代碼 | 企業名稱 | 當前價格 | 5日漲跌幅 | 成交量增幅 | 量化評分 | 市值 |")
+                    lines.append("| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |")
+                else:
+                    lines.append(f"\n### 🔍 Focus Sector ETF: {etf} ({region_lbl}) - Weekly Return: {weekly_return:+.2f}%\n")
+                    lines.append("| Rank | Ticker | Company Name | Price | 5-Day Return | Vol Spike | Quant Score | Market Cap |")
+                    lines.append("| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |")
+                    
+                for idx, pick in enumerate(picks, 1):
+                    ticker = pick["ticker"]
+                    name = pick["name"]
+                    price = pick["current_price"]
+                    ret = pick["weekly_return"] * 100
+                    spike = pick["volume_spike"]
+                    score = pick["score"]
+                    mcap = pick["market_cap"]
+                    
+                    # Format Market Cap
+                    if mcap >= 10**12:
+                        mcap_str = f"{mcap / 10**12:.2f}T"
+                    elif mcap >= 10**9:
+                        mcap_str = f"{mcap / 10**9:.2f}B"
+                    else:
+                        mcap_str = f"{mcap / 10**6:.2f}M"
+                        
+                    price_symbol = "$" if region == "US" else "NT$"
+                    
+                    lines.append(f"| {idx} | `{ticker}` | {name} | {price_symbol}{price:.2f} | {ret:+.2f}% | {spike:.2f}x | {score:.2f} | {mcap_str} |")
+                    
+                lines.append("\n---")
             
         lines.append("\n## ⚠️ 免責聲明 (Disclaimer)")
         if is_zh:

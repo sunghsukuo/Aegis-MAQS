@@ -29,7 +29,7 @@ def patch():
     target_date = "2026-05-28"
     
     # 1. Paths
-    reports_dir = Path("/mnt/p/linux/investment-analyst-agent/data/reports")
+    reports_dir = Path("/mnt/p/linux/Aegis-MAQS/data/reports")
     md_file_path = reports_dir / f"{target_date}.md"
     html_file_path = reports_dir / f"{target_date}.html"
     

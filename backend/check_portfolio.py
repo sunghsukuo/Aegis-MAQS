@@ -17,6 +17,79 @@ def print_info(msg): print(f"\033[94m[*] {msg}\033[0m")
 def print_warning(msg): print(f"\033[93m[!] {msg}\033[0m")
 def print_error(msg): print(f"\033[91m[✗] {msg}\033[0m")
 
+def calculate_risk_adjusted_metrics(currency: str) -> dict:
+    """
+    Calculates Sharpe Ratio, Sortino Ratio, and Maximum Drawdown (MDD)
+    using the historical daily NAV records in portfolio_nav_history.
+    Assuming Risk-Free Rate = 0.0 for simplicity, annualized by sqrt(252).
+    Requires zero external dependencies.
+    """
+    import math
+    
+    # 1. Fetch NAV history
+    nav_history = db.get_portfolio_nav_history(currency)
+    if not nav_history or len(nav_history) < 2:
+        return {"sharpe": 0.0, "sortino": 0.0, "mdd": 0.0, "data_points": len(nav_history)}
+        
+    # Extract NAV values in chronological order
+    navs = [r["total_nav"] for r in nav_history]
+    
+    # 2. Calculate daily returns
+    returns = []
+    for i in range(1, len(navs)):
+        prev = navs[i-1]
+        if prev > 0:
+            returns.append((navs[i] - prev) / prev)
+        else:
+            returns.append(0.0)
+            
+    if not returns:
+        return {"sharpe": 0.0, "sortino": 0.0, "mdd": 0.0, "data_points": len(nav_history)}
+        
+    # 3. Calculate Sharpe Ratio
+    # Mean return
+    mean_return = sum(returns) / len(returns)
+    # Standard deviation of returns
+    variance = sum((r - mean_return) ** 2 for r in returns) / len(returns)
+    std_return = math.sqrt(variance)
+    
+    sharpe = 0.0
+    if std_return > 0:
+        # Annualized Sharpe (assuming 252 trading days per year)
+        sharpe = (mean_return / std_return) * math.sqrt(252)
+        
+    # 4. Calculate Sortino Ratio
+    # Downside deviation only considers negative returns
+    downside_returns = [r for r in returns if r < 0.0]
+    sortino = 0.0
+    if downside_returns:
+        downside_mean = sum(downside_returns) / len(downside_returns)
+        downside_variance = sum((r - downside_mean) ** 2 for r in downside_returns) / len(downside_returns)
+        downside_std = math.sqrt(downside_variance)
+        if downside_std > 0:
+            sortino = (mean_return / downside_std) * math.sqrt(252)
+    elif mean_return > 0:
+        # If there are no negative returns and mean return is positive, Sortino is infinite or extremely high
+        sortino = 99.9
+        
+    # 5. Calculate Maximum Drawdown (MDD)
+    peak = navs[0]
+    max_dd = 0.0
+    for nav in navs:
+        if nav > peak:
+            peak = nav
+        if peak > 0:
+            dd = (peak - nav) / peak
+            if dd > max_dd:
+                max_dd = dd
+                
+    return {
+        "sharpe": float(sharpe),
+        "sortino": float(sortino),
+        "mdd": float(max_dd),
+        "data_points": len(nav_history)
+    }
+
 def run_portfolio_check(report_date: str, regions: list = None):
     """
     Performs the actual portfolio checking, price updating, and wind-down closings.
@@ -29,6 +102,9 @@ def run_portfolio_check(report_date: str, regions: list = None):
     print_success("==================================================")
     
     try:
+        from core.tools.line_notifier import LineNotifier
+        notifier = LineNotifier()
+        
         # 1. Fetch active recommendations from Database
         active_recs = []
         if regions:
@@ -80,6 +156,18 @@ def run_portfolio_check(report_date: str, regions: list = None):
                 )
                 budget_agent.record_sale(rec_id, ticker, region, current_price, report_date, performance)
                 closed_count += 1
+                
+                # Send LINE Notifier alert
+                msg = (
+                    f"🎯 【投資研究代理人·獲利平倉警報】\n\n"
+                    f"標的：{ticker} ({company_name})\n"
+                    f"狀態：已觸發目標價獲利平倉 🟢\n"
+                    f"推薦價：{recommend_price:.2f} {currency}\n"
+                    f"平倉價：{current_price:.2f} {currency} (目標價: {target_price:.2f} {currency})\n"
+                    f"累計投報率：{performance*100:+.2f}%\n\n"
+                    f"系統已自動結案並釋放資金至現金帳戶。📈"
+                )
+                notifier.send_message(msg)
             elif stop_loss and current_price <= stop_loss:
                 print_warning(
                     f"⚠️ 標的 {ticker} 跌破預設防禦停損點！\n"
@@ -90,6 +178,18 @@ def run_portfolio_check(report_date: str, regions: list = None):
                 )
                 budget_agent.record_sale(rec_id, ticker, region, current_price, report_date, performance)
                 closed_count += 1
+                
+                # Send LINE Notifier alert
+                msg = (
+                    f"⚠️ 【投資研究代理人·避險停損警報】\n\n"
+                    f"標的：{ticker} ({company_name})\n"
+                    f"狀態：跌破防禦停損點避險平倉 🔴\n"
+                    f"推薦價：{recommend_price:.2f} {currency}\n"
+                    f"平倉價：{current_price:.2f} {currency} (停損價: {stop_loss:.2f} {currency})\n"
+                    f"累計投報率：{performance*100:+.2f}%\n\n"
+                    f"系統已自動執行避險賣出，保護資金水位。🛡️"
+                )
+                notifier.send_message(msg)
             else:
                 # Still active, calculate and update current unrealized ROI & PnL
                 shares = rec.get("shares", 0.0)
@@ -108,8 +208,76 @@ def run_portfolio_check(report_date: str, regions: list = None):
         print_success(f"📊 執行摘要：在庫維持監測 {active_count} 檔 | 本次觸發平倉 {closed_count} 檔")
         print_success("==================================================")
         
+        # 2. Daily Portfolio NAV Logging & Risk Metrics Calculation (Phase 4)
+        print_info("📊 正在執行每日組合淨值 (NAV) 結算與風險指標 (Sharpe/Sortino/MDD) 計算...")
+        
+        from core.agents.budget_agent import BudgetAgent
+        budget_agent = BudgetAgent()
+        
+        # We determine which currencies to check based on requested regions
+        target_currencies = []
+        if regions:
+            for r in regions:
+                target_currencies.append(budget_agent.get_currency_by_region(r))
+            target_currencies = list(set(target_currencies))
+        else:
+            target_currencies = ["USD", "TWD"]
+            
+        for curr in target_currencies:
+            # A. Get ledger balance
+            state = budget_agent.get_capital_state(curr)
+            available = state.get("available_capital", 0.0)
+            reserved = state.get("reserved_cash", 0.0)
+            
+            # B. Get active holdings value for this currency
+            active_value = 0.0
+            region_filter = "US" if curr == "USD" else "Taiwan"
+            region_recs = db.get_active_recommendations(region=region_filter)
+            
+            for rec in region_recs:
+                shares = rec.get("shares", 0.0)
+                ticker = rec.get("ticker")
+                curr_price = yf_tool.get_stock_price(ticker)
+                if curr_price > 0.0:
+                    active_value += shares * curr_price
+                    
+            total_nav = available + reserved + active_value
+            
+            # C. Save daily NAV to database
+            db.save_portfolio_nav(report_date, curr, total_nav, available, active_value)
+            print_success(f"[{curr}] 每日組合淨值結算完成：總資產 (NAV): {total_nav:,.2f} | 可用資金: {available:,.2f} | 在庫持股價值: {active_value:,.2f}")
+            
+            # D. Calculate Sharpe, Sortino, MDD
+            metrics = calculate_risk_adjusted_metrics(curr)
+            if metrics["data_points"] >= 2:
+                print_success(
+                    f"📈 [{curr}] 量化風控回報歸因績效：\n"
+                    f"   - 觀測交易日天數: {metrics['data_points']} 天\n"
+                    f"   - 年化夏普比率 (Sharpe Ratio): {metrics['sharpe']:>+6.2f}\n"
+                    f"   - 年化索提諾比率 (Sortino Ratio): {metrics['sortino']:>+6.2f}\n"
+                    f"   - 組合最大回撤 (Max Drawdown): {metrics['mdd']*100:>6.2f}%"
+                )
+            else:
+                print_info(f"ℹ️ [{curr}] 目前累積交易日天數為 {metrics['data_points']} 天，需至少 2 天的歷史 NAV 紀錄以計算 Sharpe/Sortino 指標。")
+        print_success("==================================================")
+        
     except Exception as e:
         print_error(f"執行持股監測時發生例外錯誤: {e}")
+        # Send LINE Alert defensively
+        try:
+            from core.tools.line_notifier import LineNotifier
+            notifier = LineNotifier()
+            err_msg = (
+                f"🚨 【投資研究代理人·持股對帳系統崩潰】\n\n"
+                f"當前系統時間：{datetime.now().strftime('%Y-%m-%d %H:%M')}\n"
+                f"錯誤類別：{type(e).__name__}\n"
+                f"錯誤描述：{str(e)}\n\n"
+                f"⚠️ 警告：每日實時對帳任務執行失敗，請儘速檢查後台日誌或網路狀態！"
+            )
+            notifier.send_message(err_msg)
+        except Exception as line_ex:
+            print(f"[!] 發送 LINE 崩潰警報失敗: {line_ex}")
+            
         # When called as module in pipeline, raise exception; when run as script, exit with error
         if __name__ == "__main__":
             sys.exit(1)
@@ -122,6 +290,14 @@ def main():
     parser.add_argument("--regions", nargs="+", default=[], help="指定對帳區域，例如 US Taiwan (不指定則預設全域對帳)")
     args = parser.parse_args()
     
+    # Auto-rotate logs defensively on startup to prevent disk space exhaustion
+    try:
+        from core.config import LOGS_DIR
+        from core.tools.utils import rotate_log_file
+        rotate_log_file(LOGS_DIR / "check_portfolio.log", max_bytes=10*1024*1024)
+    except Exception as le:
+        print(f"[!] Log Rotator Failure: {le}")
+        
     report_date = datetime.now().strftime("%Y-%m-%d")
     run_portfolio_check(report_date, regions=args.regions)
 

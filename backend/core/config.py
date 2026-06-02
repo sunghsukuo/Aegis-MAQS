@@ -13,7 +13,7 @@ DATA_DIR = CORE_DIR / "data"
 DB_DIR = DATA_DIR / "db"
 
 # Configurable reports directory with fallback
-DEFAULT_REPORTS_DIR = "/mnt/p/linux/investment-analyst-agent/data/reports"
+DEFAULT_REPORTS_DIR = "/mnt/p/linux/Aegis-MAQS/data/reports"
 REPORTS_DIR_PATH = os.getenv("REPORTS_DIR", DEFAULT_REPORTS_DIR)
 REPORTS_DIR = Path(REPORTS_DIR_PATH)
 
@@ -28,8 +28,20 @@ except Exception as e:
     REPORTS_DIR = fallback_path
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
+# Logs Directory
+LOGS_DIR = BACKEND_ROOT / "logs"
+LOGS_DIR.mkdir(parents=True, exist_ok=True)
+
+# Cache Directory
+CACHE_DIR = DATA_DIR / "cache"
+CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
 # API Keys
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+
+# LINE Messaging API Configuration
+LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
+LINE_USER_ID = os.getenv("LINE_USER_ID")
 
 # Database Configuration
 DB_TYPE = os.getenv("DB_TYPE", "sqlite")
@@ -63,6 +75,7 @@ REGIONS = {
             },
             "XLF": {
                 "name": "金融 (Financials)",
+                "target_type": "proxy",
                 "constituents": [
                     "JPM", "BRK-B", "V", "MA", "BAC", "WFC", "MS", "GS", "SCHW", "C", 
                     "BLK", "AXP", "BX", "CB", "SPGI", "MMC", "PGR", "MET", "AON", "USB"
@@ -70,6 +83,7 @@ REGIONS = {
             },
             "XLE": {
                 "name": "能源 (Energy)",
+                "target_type": "proxy",
                 "constituents": [
                     "XOM", "CVX", "COP", "SLB", "EOG", "MPC", "PSX", "VLO", "OXY", "WMB", 
                     "HAL", "BKR", "HES", "KMI", "ONEOK", "DVN", "CTRA", "APA", "FANG", "MRO"
@@ -127,14 +141,26 @@ REGIONS = {
         "sector_etfs": {
             "0050.TW": {
                 "name": "元大台灣50 (Broad Market)",
+                "target_type": "constituents",
                 "constituents": [
                     "2330.TW", "2317.TW", "2454.TW", "2382.TW", "2308.TW", "2881.TW", "2882.TW", "2303.TW", 
                     "2891.TW", "3711.TW", "2412.TW", "1216.TW", "2886.TW", "5871.TW", "2603.TW", "2884.TW", 
                     "2892.TW", "3231.TW", "2357.TW", "2324.TW", "2885.TW", "2880.TW", "2912.TW", "3045.TW"
                 ]
             },
+	    "0051.TW": {
+                "name": "元大台灣中型100 (Mid-Cap Market)",
+                "target_type": "constituents",
+                "constituents": [
+                    "3443.TW", "4958.TW", "3481.TW", "3665.TW", "2337.TW", "6770.TW", "2313.TW", "2379.TW",
+                    "3034.TW", "6239.TW", "6446.TW", "3036.TW", "3189.TW", "3044.TW", "3533.TW", "6515.TW",
+                    "2376.TW", "6415.TW", "1590.TW", "2404.TW", "2356.TW", "8046.TW", "3702.TW", "4938.TW",
+                    "1326.TW"
+                ]
+            },
             "0052.TW": {
                 "name": "富邦科技 (Tech Sector)",
+                "target_type": "constituents",
                 "constituents": [
                     "2330.TW", "2454.TW", "2317.TW", "2382.TW", "2308.TW", "2303.TW", "3711.TW", "2379.TW", 
                     "3231.TW", "2345.TW", "2408.TW", "3034.TW", "2357.TW", "2449.TW", "3044.TW", "2376.TW", 
@@ -143,15 +169,33 @@ REGIONS = {
             },
             "0056.TW": {
                 "name": "元大高股息 (High Dividend)",
+                "target_type": "proxy",
                 "constituents": [
                     "2382.TW", "3231.TW", "2301.TW", "2357.TW", "2603.TW", "3034.TW", "2454.TW", "2324.TW", 
                     "3711.TW", "2379.TW", "3044.TW", "2409.TW", "3481.TW", "2891.TW", "2886.TW", "2408.TW", 
                     "2303.TW", "2882.TW", "2881.TW", "1101.TW", "2002.TW", "2885.TW", "2892.TW", "2890.TW"
                 ]
             },
+            "00892.TW": {
+                "name": "富邦台灣半導體 (Semiconductor Sector)",
+                "target_type": "constituents",
+                "constituents": [
+                    "2330.TW", "2454.TW", "7769.TW", "3711.TW", "5274.TWO", "3034.TW", "6223.TWO", 
+                    "2379.TW", "6515.TW", "3529.TWO", "6187.TWO", "2455.TW", "5434.TW", "3131.TWO", "6510.TWO"
+                ]
+            },
+            "00947.TW": {
+                "name": "台新臺灣IC設計 (IC Design Sector)",
+                "target_type": "constituents",
+                "constituents": [
+                    "2454.TW", "2408.TW", "2344.TW", "2308.TW", "8299.TWO", "3443.TW", "5274.TWO", 
+                    "3661.TW", "2337.TW", "3529.TWO", "6415.TW", "6531.TW", "2379.TW", "3034.TW", "5269.TW"
+                ]
+            },
             "2330.TW": {
-                "name": "台積電 (Semiconductor Proxy)",
-                "constituents": ["2330.TW", "2449.TW", "3711.TW", "2408.TW", "2344.TW", "3231.TW", "2303.TW", "2454.TW", "3034.TW", "3532.TW", "6271.TW", "8046.TW", "3008.TW", "3653.TW"]
+                "name": "台積電 (TSMC Direct)",
+                "target_type": "proxy",
+                "is_etf": False
             },
             "2881.TW": {
                 "name": "富邦金 (Financials Proxy)",

@@ -131,7 +131,7 @@ def main():
     print("==================================================")
     if yf_ok and search_ok:
         if gemini_ok:
-            print_green("🎉 所有核心模組測試全數通過！您可以執行 pipenv run python generate_report.py 生成完整投資週報了！")
+            print_green("🎉 所有核心模組測試全數通過！您可以執行 pipenv run python aegis_cli.py 生成完整投資週報了！")
         else:
             print_yellow("💡 數據源功能正常，只要在 backend/.env 中填入 GEMINI_API_KEY，即可啟用完整多代理人研究報告！")
     else:

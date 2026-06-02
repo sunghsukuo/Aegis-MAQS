@@ -3,6 +3,7 @@ from datetime import datetime
 from contextlib import contextmanager
 import pymysql
 import pymysql.cursors
+from core.tools.utils import retry_on_exception
 from core.config import (
     DB_DIR, DB_TYPE, MYSQL_HOST, MYSQL_PORT, 
     MYSQL_USER, MYSQL_PASSWORD, MYSQL_DB
@@ -10,26 +11,34 @@ from core.config import (
 
 DB_PATH = DB_DIR / "investments.db"
 
+@retry_on_exception(tries=3, delay=1, backoff=2, exceptions=(pymysql.Error, ConnectionError))
+def _get_mysql_connection_raw():
+    """Establishes raw MySQL connection with exponential retries."""
+    return pymysql.connect(
+        host=MYSQL_HOST,
+        port=MYSQL_PORT,
+        user=MYSQL_USER,
+        password=MYSQL_PASSWORD,
+        database=MYSQL_DB,
+        charset="utf8mb4",
+        cursorclass=pymysql.cursors.DictCursor
+    )
+
 @contextmanager
 def db_session():
     """
     Unified database context manager.
     Automatically handles connection, commits, rollbacks, and clean-up 
     for both SQLite and MySQL based on DB_TYPE.
+    Integrates 3-trial connection retries and auto-reconnect ping for MySQL.
     """
     is_mysql = (DB_TYPE == "mysql")
     conn = None
     try:
         if is_mysql:
-            conn = pymysql.connect(
-                host=MYSQL_HOST,
-                port=MYSQL_PORT,
-                user=MYSQL_USER,
-                password=MYSQL_PASSWORD,
-                database=MYSQL_DB,
-                charset="utf8mb4",
-                cursorclass=pymysql.cursors.DictCursor
-            )
+            conn = _get_mysql_connection_raw()
+            # Proactively ping with reconnect=True to restore any dead sockets silently
+            conn.ping(reconnect=True)
         else:
             import sqlite3
             conn = sqlite3.connect(str(DB_PATH))
@@ -225,6 +234,93 @@ def init_db():
                 cursor.execute("ALTER TABLE recommendations ADD COLUMN shares REAL DEFAULT 0.0;")
                 cursor.execute("ALTER TABLE recommendations ADD COLUMN pnl REAL DEFAULT 0.0;")
                 print("[✓] SQLite recommendations table upgraded with capital tracking columns.")
+
+        # 5. Portfolio NAV History Table DDL
+        if DB_TYPE == "mysql":
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS portfolio_nav_history (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    date VARCHAR(50) NOT NULL,
+                    currency VARCHAR(10) NOT NULL,
+                    total_nav DOUBLE NOT NULL,
+                    available_capital DOUBLE NOT NULL,
+                    active_value DOUBLE NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE KEY idx_date_currency (date, currency)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+            """)
+        else:
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS portfolio_nav_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    date TEXT NOT NULL,
+                    currency TEXT NOT NULL,
+                    total_nav REAL NOT NULL,
+                    available_capital REAL NOT NULL,
+                    active_value REAL NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(date, currency)
+                )
+            """)
+
+        # 6. Prompt Registry Table DDL
+        if DB_TYPE == "mysql":
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS prompt_registry (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    agent_name VARCHAR(50) NOT NULL,
+                    system_prompt LONGTEXT NOT NULL,
+                    version VARCHAR(20) NOT NULL,
+                    is_active INT DEFAULT 1,
+                    performance_score DOUBLE DEFAULT 0.0,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    UNIQUE KEY idx_agent_version (agent_name, version)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+            """)
+        else:
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS prompt_registry (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    agent_name TEXT NOT NULL,
+                    system_prompt TEXT NOT NULL,
+                    version TEXT NOT NULL,
+                    is_active INTEGER DEFAULT 1,
+                    performance_score REAL DEFAULT 0.0,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(agent_name, version)
+                )
+            """)
+
+        # 7. Agent Inference Logs Table DDL
+        if DB_TYPE == "mysql":
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS agent_inference_logs (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    rec_id INT,
+                    agent_name VARCHAR(50) NOT NULL,
+                    ticker VARCHAR(20),
+                    input_prompt LONGTEXT NOT NULL,
+                    output_response LONGTEXT NOT NULL,
+                    prompt_version VARCHAR(20) NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (rec_id) REFERENCES recommendations(id) ON DELETE SET NULL,
+                    INDEX idx_agent_ticker (agent_name, ticker)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+            """)
+        else:
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS agent_inference_logs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    rec_id INTEGER,
+                    agent_name TEXT NOT NULL,
+                    ticker TEXT,
+                    input_prompt TEXT NOT NULL,
+                    output_response TEXT NOT NULL,
+                    prompt_version TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (rec_id) REFERENCES recommendations(id) ON DELETE SET NULL
+                )
+            """)
 
         # Seed capital_ledger with default starting balances if empty
         execute_sql(cursor,
@@ -451,3 +547,152 @@ def get_historical_performance():
             "total_recommendations": total,
             "closed": closed_recs
         }
+
+def save_portfolio_nav(date: str, currency: str, total_nav: float, available_capital: float, active_value: float):
+    """Inserts or updates the daily Portfolio Net Asset Value (NAV) record."""
+    with db_session() as conn:
+        cursor = conn.cursor()
+        execute_sql(cursor,
+            # SQLite:
+            """
+            INSERT INTO portfolio_nav_history (date, currency, total_nav, available_capital, active_value)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(date, currency) DO UPDATE SET
+                total_nav=excluded.total_nav,
+                available_capital=excluded.available_capital,
+                active_value=excluded.active_value
+            """,
+            # MySQL:
+            """
+            INSERT INTO portfolio_nav_history (date, currency, total_nav, available_capital, active_value)
+            VALUES (%s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+                total_nav=VALUES(total_nav),
+                available_capital=VALUES(available_capital),
+                active_value=VALUES(active_value)
+            """,
+            (date, currency, total_nav, available_capital, active_value)
+        )
+
+def get_portfolio_nav_history(currency: str) -> list:
+    """Fetches all daily NAV records for the given currency sorted by date ascending."""
+    with db_session() as conn:
+        cursor = conn.cursor()
+        execute_sql(cursor,
+            "SELECT date, total_nav, available_capital, active_value FROM portfolio_nav_history WHERE currency = ? ORDER BY date ASC",
+            "SELECT date, total_nav, available_capital, active_value FROM portfolio_nav_history WHERE currency = %s ORDER BY date ASC",
+            (currency,)
+        )
+        rows = cursor.fetchall()
+        results = []
+        for r in rows:
+            if isinstance(r, dict):
+                results.append(r)
+            else:
+                results.append({
+                    "date": r[0],
+                    "total_nav": r[1],
+                    "available_capital": r[2],
+                    "active_value": r[3]
+                })
+        return results
+
+# --- Self-Reflective Prompt Optimization Engine Helpers ---
+
+def get_active_prompt(agent_name: str) -> dict:
+    """Fetches the currently active system prompt for the given agent from the database."""
+    with db_session() as conn:
+        cursor = conn.cursor()
+        execute_sql(cursor,
+            "SELECT system_prompt, version FROM prompt_registry WHERE agent_name = ? AND is_active = 1 LIMIT 1",
+            "SELECT system_prompt, version FROM prompt_registry WHERE agent_name = %s AND is_active = 1 LIMIT 1",
+            (agent_name,)
+        )
+        row = cursor.fetchone()
+        if row:
+            if isinstance(row, dict):
+                return {"system_prompt": row["system_prompt"], "version": row["version"]}
+            else:
+                return {"system_prompt": row[0], "version": row[1]}
+        return None
+
+def save_agent_inference_log(rec_id: int, agent_name: str, ticker: str, input_prompt: str, output_response: str, prompt_version: str):
+    """Saves a detailed LLM inference log into the database."""
+    with db_session() as conn:
+        cursor = conn.cursor()
+        execute_sql(cursor,
+            # SQLite
+            """
+            INSERT INTO agent_inference_logs (rec_id, agent_name, ticker, input_prompt, output_response, prompt_version)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            # MySQL
+            """
+            INSERT INTO agent_inference_logs (rec_id, agent_name, ticker, input_prompt, output_response, prompt_version)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            """,
+            (rec_id, agent_name, ticker, input_prompt, output_response, prompt_version)
+        )
+
+def save_prompt_registry(agent_name: str, system_prompt: str, version: str, is_active: int = 1):
+    """Saves a new prompt version into the database and deactivates any existing version for this agent if is_active=1."""
+    with db_session() as conn:
+        cursor = conn.cursor()
+        if is_active == 1:
+            # Deactivate existing active prompts for this agent
+            execute_sql(cursor,
+                "UPDATE prompt_registry SET is_active = 0 WHERE agent_name = ?",
+                "UPDATE prompt_registry SET is_active = 0 WHERE agent_name = %s",
+                (agent_name,)
+            )
+        # Insert the new version
+        execute_sql(cursor,
+            # SQLite
+            """
+            INSERT OR REPLACE INTO prompt_registry (agent_name, system_prompt, version, is_active)
+            VALUES (?, ?, ?, ?)
+            """,
+            # MySQL
+            """
+            INSERT INTO prompt_registry (agent_name, system_prompt, version, is_active)
+            VALUES (%s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE system_prompt=VALUES(system_prompt), is_active=VALUES(is_active)
+            """,
+            (agent_name, system_prompt, version, is_active)
+        )
+
+def get_recent_inference_logs_with_roi(agent_name: str, limit: int = 6) -> list:
+    """Fetches recent inference logs matched with their actual trade performance (ROI) from recommendations."""
+    with db_session() as conn:
+        cursor = conn.cursor()
+        query_sqlite = """
+            SELECT l.ticker, r.performance as roi, l.input_prompt, l.output_response, l.prompt_version
+            FROM agent_inference_logs l
+            JOIN recommendations r ON l.rec_id = r.id
+            WHERE l.agent_name = ? AND r.performance IS NOT NULL
+            ORDER BY r.id DESC
+            LIMIT ?
+        """
+        query_mysql = """
+            SELECT l.ticker, r.performance as roi, l.input_prompt, l.output_response, l.prompt_version
+            FROM agent_inference_logs l
+            INNER JOIN recommendations r ON l.rec_id = r.id
+            WHERE l.agent_name = %s AND r.performance IS NOT NULL
+            ORDER BY r.id DESC
+            LIMIT %s
+        """
+        execute_sql(cursor, query_sqlite, query_mysql, (agent_name, limit))
+        rows = cursor.fetchall()
+        results = []
+        for r in rows:
+            if isinstance(r, dict):
+                results.append(r)
+            else:
+                results.append({
+                    "ticker": r[0],
+                    "roi": r[1],
+                    "input_prompt": r[2],
+                    "output_response": r[3],
+                    "prompt_version": r[4]
+                })
+        return results
