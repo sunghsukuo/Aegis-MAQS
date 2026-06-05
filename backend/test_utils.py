@@ -71,5 +71,29 @@ class TestRegime(unittest.TestCase):
         self.assertEqual(retrieved["adx"], 15.4)
         self.assertEqual(retrieved["hurst"], 0.42)
 
+class TestScreenerFactory(unittest.TestCase):
+    def test_factory_momentum_routing(self):
+        from core.screener.factory import ScreenerFactory
+        from core.screener.momentum_strategy import MomentumScreener
+        
+        screener = ScreenerFactory.get_screener("MOMENTUM_TREND")
+        self.assertIsInstance(screener, MomentumScreener)
+
+    def test_factory_reversion_routing(self):
+        from core.screener.factory import ScreenerFactory
+        from core.screener.reversion_strategy import ReversionScreener
+        
+        screener = ScreenerFactory.get_screener("MEAN_REVERSION_RANGE")
+        self.assertIsInstance(screener, ReversionScreener)
+
+class TestQuantScreenerFacade(unittest.TestCase):
+    def test_facade_routing(self):
+        from core.tools.screener import QuantScreener
+        screener = QuantScreener()
+        # Test fetch constituents (mock list or cache fallback should work)
+        constituents = screener.fetch_etf_constituents("XLK")
+        self.assertTrue(isinstance(constituents, list))
+        self.assertTrue(len(constituents) > 0)
+
 if __name__ == "__main__":
     unittest.main()
