@@ -54,7 +54,47 @@ class QuantScreener:
         except Exception as e:
             print(f"[!] [Screener] 動態抓取 {etf_ticker} 成分股失敗 ({e})。將切換至靜態高品質快取。")
             
-        # Fallback to local cache with automatic proxy resolver
+        # 1. Prioritize database registry loading (Phase 5 Dynamic Config)
+        try:
+            import core.db_manager as db
+            with db.db_session() as conn:
+                cursor = conn.cursor()
+                db.execute_sql(cursor,
+                    "SELECT id FROM sector_registry WHERE sector_code = ? AND is_active = 1",
+                    "SELECT id FROM sector_registry WHERE sector_code = %s AND is_active = 1",
+                    (etf_ticker,)
+                )
+                row = cursor.fetchone()
+                if row:
+                    if isinstance(row, dict):
+                        sector_id = row["id"]
+                    elif isinstance(row, tuple):
+                        sector_id = row[0]
+                    else:
+                        sector_id = row
+                        
+                    db.execute_sql(cursor,
+                        "SELECT ticker FROM sector_constituents WHERE sector_id = ?",
+                        "SELECT ticker FROM sector_constituents WHERE sector_id = %s",
+                        (sector_id,)
+                    )
+                    rows = cursor.fetchall()
+                    if rows:
+                        db_constituents = []
+                        for r in rows:
+                            if isinstance(r, dict):
+                                db_constituents.append(r["ticker"])
+                            elif isinstance(r, tuple):
+                                db_constituents.append(r[0])
+                            else:
+                                db_constituents.append(r)
+                        
+                        print(f"[*] [Screener] 從資料庫載入 {etf_ticker} 成分股清單 (共 {len(db_constituents)} 檔標的)。")
+                        return db_constituents
+        except Exception as db_ex:
+            print(f"[!] [Screener] 從資料庫載入 {etf_ticker} 成分股失敗 ({db_ex})，將切換至記憶體快取。")
+
+        # 2. Fallback to local cache with automatic proxy resolver if DB lookup is empty/fails
         cache_list = ETF_CONSTITUENTS_CACHE.get(etf_ticker)
         if cache_list is None:
             # Smart automatic classifier for regional sector proxies
@@ -216,9 +256,10 @@ class QuantScreener:
                 # Override with Chinese name for Taiwan stocks to prevent translation hallucinations
                 if region == "Taiwan" or ticker.endswith(".TW") or ticker.endswith(".TWO"):
                     ticker_num = ticker.split(".")[0]
-                    from core.config import TAIWAN_NAMES
-                    if ticker_num in TAIWAN_NAMES:
-                        name = f"{TAIWAN_NAMES[ticker_num]} ({name})"
+                    from core.tools.taiwan_stock_names import get_taiwan_stock_name
+                    db_name = get_taiwan_stock_name(ticker_num)
+                    if db_name:
+                        name = f"{db_name} ({name})"
                 
                 # 5. Combined Score
                 # Return score is weekly return in % (e.g. 8.5% is 8.5)

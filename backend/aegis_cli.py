@@ -11,7 +11,7 @@ import time
 sys.path.append(str(Path(__file__).resolve().parent))
 
 # Import Config, Tools & Database
-from core.config import REGIONS, REPORTS_DIR, MAX_SECTORS_PER_REGION, MAX_STOCKS_PER_REGION, DB_TYPE, REPORT_LANGUAGE
+from core.config import REGIONS, REPORTS_DIR, DEFAULT_REPORTS_DIR, MAX_SECTORS_PER_REGION, MAX_STOCKS_PER_REGION, DB_TYPE, REPORT_LANGUAGE
 import core.db_manager as db
 import core.tools.yahoo_finance as yf_tool
 import core.tools.web_search as search_tool
@@ -24,12 +24,57 @@ from core.agents.news_agent import NewsAgent
 from core.agents.fundamental_agent import FundamentalAgent
 from core.agents.reflection_agent import ReflectionAgent
 from core.agents.writer_agent import WriterAgent
+from core.tools.valuation_engine import ValuationEngine
 
 # Color outputs
 def print_success(msg): print(f"\033[92m[✓] {msg}\033[0m")
 def print_info(msg): print(f"\033[94m[*] {msg}\033[0m")
 def print_warning(msg): print(f"\033[93m[!] {msg}\033[0m")
 def print_error(msg): print(f"\033[91m[✗] {msg}\033[0m")
+
+
+def format_markdown_for_terminal(text: str) -> str:
+    """
+    Converts markdown syntax into clean, professional plain text for terminal reading.
+    Strips raw markdown markers like #, *, _, and replaces bold markers with clean layouts.
+    """
+    import re
+    lines = text.split("\n")
+    formatted_lines = []
+    for line in lines:
+        # 1. Convert headers: '### Header' -> '【 Header 】'
+        header_match = re.match(r"^(#{1,6})\s+(.*)$", line)
+        if header_match:
+            level = len(header_match.group(1))
+            content = header_match.group(2)
+            # Strip styling from header content
+            content = content.replace("*", "").replace("_", "")
+            if level <= 3:
+                formatted_lines.append(f"\n\033[1;32m【 {content} 】\033[0m")
+            else:
+                formatted_lines.append(f"\n\033[1;36m  {content}\033[0m")
+            continue
+            
+        # 2. Identify and convert bullet points first
+        bullet_match = re.match(r"^(\s*)[\*\-+]\s+(.*)$", line)
+        if bullet_match:
+            indent = bullet_match.group(1)
+            content = bullet_match.group(2)
+            
+            # Replace multiplication asterisks in formulas with "×"
+            content = re.sub(r"(\b\w+|\d+)\s*\*\s*(\b\w+|\d+)", r"\1 × \2", content)
+            # Strip all other markdown asterisks/underscores in bullet content
+            content = content.replace("*", "").replace("_", "")
+            
+            formatted_lines.append(f"{indent}▪ {content}")
+        else:
+            # Replace multiplication asterisks in formulas with "×"
+            line = re.sub(r"(\b\w+|\d+)\s*\*\s*(\b\w+|\d+)", r"\1 × \2", line)
+            line = line.replace("*", "").replace("_", "")
+            formatted_lines.append(line)
+            
+    return "\n".join(formatted_lines)
+
 
 
 def run_regional_reflection(region_code: str, report_date: str) -> str:
@@ -268,8 +313,8 @@ def run_regional_analysis(region_code: str, report_date: str, reflection_directi
         if stocks_analyzed >= MAX_STOCKS_PER_REGION:
             break
             
-        # Get sector configuration
-        sector_config = REGIONS[region_code]["sector_etfs"].get(etf_ticker, {})
+        # Get sector configuration (prioritize database-driven configuration)
+        sector_config = db.get_active_sectors(region_code).get(etf_ticker, {})
         target_type = sector_config.get("target_type", "constituents")
         
         if target_type == "proxy":
@@ -320,18 +365,27 @@ def run_regional_analysis(region_code: str, report_date: str, reflection_directi
                     print_warning(f"記錄篩選報告 proxy ETF 失敗: {ex}")
                 
             # D. Run Fundamental Agent incorporating Macro Context & Self-Correction Reflection Directives!
+            print_info(f"   - 啟動投行量化估值模型 (Equity Valuation Engine)...")
+            try:
+                valuation_report = ValuationEngine.run_valuation(ticker, financials)
+            except Exception as val_err:
+                valuation_report = f"量化估值模型執行出錯: {val_err}"
+
             print_info(f"   - 基本面估值與決策修正中...")
             fundamental_agent = FundamentalAgent()
             
-            # Combine macro context and reflection instructions to guide the fundamental agent
+            # Combine macro context, reflection instructions, and quantitative valuation report to guide the fundamental agent
             combined_context = f"""
 【當前巨觀經濟環境】：
 {macro_report}
 
 【前期歷史回測之自我修正指令】：
 {reflection_directives}
+
+【投行級別量化估值模型報告 (Equity Valuation Engine)】:
+{valuation_report}
 """
-            stock_report = fundamental_agent.analyze(ticker, name, financials, news_analysis, combined_context)
+            stock_report = fundamental_agent.analyze(ticker, name, financials, news_analysis, combined_context, market_regime=market_regime)
             stock_analysis_reports.append(stock_report)
             time.sleep(3)  # Respect free tier rate limits (15 RPM)
             
@@ -821,6 +875,28 @@ def evolve_active_prompts():
     except Exception as ex:
         print_warning(f"[自適應 Prompt 演化] 執行過程中發生異常，跳過本次 Prompt 演化: {ex}")
 
+def resolve_ticker_and_region(query_str: str) -> tuple:
+    """
+    Resolves ticker, region and company names by checking the local Taiwan stock database first,
+    then falling back to LLM.
+    """
+    # 1. Try local Taiwan stock names lookup first
+    try:
+        from core.tools.taiwan_stock_names import resolve_taiwan_ticker_locally
+        local_result = resolve_taiwan_ticker_locally(query_str)
+        if local_result:
+            return (
+                local_result["ticker"],
+                local_result["region"],
+                local_result["company_name"],
+                local_result["company_name_zh"]
+            )
+    except Exception as ex:
+        print(f"[!] Local Taiwan ticker resolution error: {ex}")
+        
+    # 2. Fallback to LLM TickerResolver
+    return resolve_ticker_and_region_via_llm(query_str)
+
 def resolve_ticker_and_region_via_llm(query_str: str) -> tuple:
     """
     Uses a quick LLM call to resolve name or ticker to (standard_ticker, region_code, company_name, company_name_zh).
@@ -855,12 +931,13 @@ def resolve_ticker_and_region_via_llm(query_str: str) -> tuple:
         company_name = data.get("company_name")
         company_name_zh = data.get("company_name_zh")
         
-        # Override company names using our local TAIWAN_NAMES registry to ensure 100% correctness
+        # Override company names using our local registry to ensure 100% correctness
         if ticker and (ticker.endswith(".TW") or ticker.endswith(".TWO")):
             ticker_num = ticker.split(".")[0]
-            from core.config import TAIWAN_NAMES
-            if ticker_num in TAIWAN_NAMES:
-                company_name_zh = TAIWAN_NAMES[ticker_num]
+            from core.tools.taiwan_stock_names import get_taiwan_stock_name
+            db_name = get_taiwan_stock_name(ticker_num)
+            if db_name:
+                company_name_zh = db_name
                 
         return ticker, region, company_name, company_name_zh
     except Exception as e:
@@ -925,12 +1002,15 @@ def run_realtime_query(query_str: str, track_option: bool, report_date: str):
     
     # 1. Resolve ticker
     print_info("正在解析標的名稱與交易所代碼...")
-    ticker, region_code, company_name, company_name_zh = resolve_ticker_and_region_via_llm(query_str)
+    ticker, region_code, company_name, company_name_zh = resolve_ticker_and_region(query_str)
     if not ticker or not region_code:
         print_error(f"無法解析此標的：'{query_str}'，請確認輸入是否正確。")
         return
         
-    display_name = f"{company_name_zh} ({company_name})" if company_name_zh else company_name
+    if company_name_zh and company_name_zh != company_name:
+        display_name = f"{company_name_zh} ({company_name})"
+    else:
+        display_name = company_name_zh if company_name_zh else company_name
     print_success(f"成功解析！標準代碼: {ticker} | 市場區域: {region_code} | 公司名稱: {display_name}")
     
     # 2. Fetch latest macro & reflection context
@@ -961,6 +1041,12 @@ def run_realtime_query(query_str: str, track_option: bool, report_date: str):
         return
         
     # 6. Fundamental Agent Analysis
+    print_info("啟動投行量化估值模型 (Equity Valuation Engine)...")
+    try:
+        valuation_report = ValuationEngine.run_valuation(ticker, financials)
+    except Exception as val_err:
+        valuation_report = f"量化估值模型執行出錯: {val_err}"
+
     print_info("個股估值與決策修正分析中...")
     fundamental_agent = FundamentalAgent()
     combined_context = f"""
@@ -969,8 +1055,11 @@ def run_realtime_query(query_str: str, track_option: bool, report_date: str):
 
 【前期歷史回測之自我修正指令】：
 {reflection_directives}
+
+【投行級別量化估值模型報告 (Equity Valuation Engine)】:
+{valuation_report}
 """
-    stock_report = fundamental_agent.analyze(ticker, display_name, financials, news_analysis, combined_context)
+    stock_report = fundamental_agent.analyze(ticker, display_name, financials, news_analysis, combined_context, market_regime=market_regime)
     time.sleep(2)
     
     # 7. Parse output parameters
@@ -1037,10 +1126,11 @@ def run_realtime_query(query_str: str, track_option: bool, report_date: str):
         target_p_display = f"{target_p:.2f} {currency}"
         stop_l_display = f"{stop_l:.2f} {currency}"
         
-    # 8. Beautiful ASCII output table
-    print_success("\n" + "="*50)
-    print_success("📈 Aegis-MAQS 智慧決策操作指南對帳單")
-    print_success("="*50)
+    # 8. Beautiful formatted outputs arranged by chapters
+    # Chapter 1: Decision summary table (no print_success prefix, symmetrical, clean borders)
+    print("\n" + "\033[92m" + "="*60 + "\033[0m")
+    print("\033[92m  🎯 第一章：智慧投資決策與交易指令概要 (Decision Card)\033[0m")
+    print("\033[92m" + "="*60 + "\033[0m")
     
     table_rows = [
         ("國家區域", region_display),
@@ -1057,11 +1147,64 @@ def run_realtime_query(query_str: str, track_option: bool, report_date: str):
     for key, val in table_rows:
         print(f"  • {key.ljust(10, '　')}: {val}")
         
-    print_success("="*50)
-    print("\n💡 【深度定性基本面分析與催化劑評估】：")
-    print(stock_report)
+    print("\033[92m" + "="*60 + "\033[0m")
     
-    # 9. Track recommendation if option selected
+    # Chapter 2: Quantitative valuation report (restored to raw Markdown as requested)
+    print("\n" + "\033[94m" + "="*60 + "\033[0m")
+    print("\033[94m  🏦 第二章：投行量化估值模型報告 (Equity Valuation Engine Report)\033[0m")
+    print("\033[94m" + "="*60 + "\033[0m")
+    print(valuation_report)
+    print("\033[94m" + "="*60 + "\033[0m")
+    
+    # Chapter 3: LLM Qualitative Report (restored to raw Markdown as requested)
+    print("\n" + "\033[93m" + "="*60 + "\033[0m")
+    print("\033[93m  💡 第三章：大模型深度基本面分析與決策修正 (LLM Report)\033[0m")
+    print("\033[93m" + "="*60 + "\033[0m")
+    print(stock_report)
+    print("\033[93m" + "="*60 + "\033[0m")
+
+    # 9. Save query report to DEFAULT_REPORTS_DIR/../query/ subdirectory in raw Markdown
+    try:
+        query_dir = Path(DEFAULT_REPORTS_DIR).parent / "query"
+        query_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Prepare file content
+        query_md_content = f"""# 🎯 Aegis-MAQS 智慧投資決策報告 - {ticker} ({display_name})
+*   **分析日期**: {report_date}
+*   **國家區域**: {region_display}
+
+## 🎯 第一章：智慧投資決策與交易指令概要
+
+| 項目 | 數值 |
+| :--- | :--- |
+| **國家區域** | {region_display} |
+| **標的代碼** | {ticker} |
+| **企業名稱** | {display_name} |
+| **推薦評級** | {rating} |
+| **即時現價** | {curr_price:.2f} {currency} |
+| **推薦買入區間** | {buy_range_display} |
+| **中線目標價** | {target_p_display} |
+| **防禦停損點** | {stop_l_display} |
+| **建議持倉權重** | {suggested_weight * 100:.1f}% |
+
+---
+
+{valuation_report}
+
+---
+
+{stock_report}
+"""
+        query_file_name = f"{ticker}_{report_date}.md"
+        query_file_path = query_dir / query_file_name
+        with open(query_file_path, "w", encoding="utf-8") as f:
+            f.write(query_md_content)
+            
+        print_success(f"已將即時查詢報告儲存至: {query_file_path}")
+    except Exception as save_err:
+        print_warning(f"儲存即時查詢報告失敗: {save_err}")
+        
+    # 10. Track recommendation if option selected
     if track_option:
         if rating not in ["Buy", "Strong Buy"]:
             print_warning(f"\n[⚠️ 追蹤警告] 標的 {ticker} 推薦評級為 {rating}，未達 Buy/Strong Buy 買入標準，不予寫入持股追蹤帳本。")

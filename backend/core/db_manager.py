@@ -322,6 +322,92 @@ def init_db():
                 )
             """)
 
+        # Check if taiwan_stock_names needs upgrade to include industry_type
+        try:
+            if DB_TYPE == "mysql":
+                cursor.execute("SHOW COLUMNS FROM taiwan_stock_names LIKE 'industry_type'")
+                if not cursor.fetchone():
+                    cursor.execute("DROP TABLE IF EXISTS taiwan_stock_names;")
+                    print("[✓] MySQL taiwan_stock_names table dropped for industry_type upgrade.")
+            else:
+                cursor.execute("PRAGMA table_info(taiwan_stock_names)")
+                cols = [row[1] for row in cursor.fetchall()]
+                if cols and "industry_type" not in cols:
+                    cursor.execute("DROP TABLE IF EXISTS taiwan_stock_names;")
+                    print("[✓] SQLite taiwan_stock_names table dropped for industry_type upgrade.")
+        except Exception as e:
+            pass
+
+        # 8. Taiwan Stock Names Registry Table DDL
+        if DB_TYPE == "mysql":
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS taiwan_stock_names (
+                    stock_code VARCHAR(20) PRIMARY KEY,
+                    chinese_name VARCHAR(100) NOT NULL,
+                    market_type VARCHAR(10) NOT NULL DEFAULT 'TW',
+                    industry_type VARCHAR(100) DEFAULT ''
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+            """)
+        else:
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS taiwan_stock_names (
+                    stock_code TEXT PRIMARY KEY,
+                    chinese_name TEXT NOT NULL,
+                    market_type TEXT NOT NULL DEFAULT 'TW',
+                    industry_type TEXT DEFAULT ''
+                )
+            """)
+
+        # 9. Sector Registry & Constituents Tables DDL
+        if DB_TYPE == "mysql":
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS sector_registry (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    region VARCHAR(20) NOT NULL,
+                    sector_code VARCHAR(50) NOT NULL UNIQUE,
+                    sector_name VARCHAR(100) NOT NULL,
+                    target_type VARCHAR(20) NOT NULL,
+                    is_etf TINYINT NOT NULL DEFAULT 1,
+                    is_active TINYINT NOT NULL DEFAULT 1,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS sector_constituents (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    sector_id INT NOT NULL,
+                    ticker VARCHAR(20) NOT NULL,
+                    company_name VARCHAR(100) DEFAULT '',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE KEY uq_sector_ticker (sector_id, ticker),
+                    FOREIGN KEY (sector_id) REFERENCES sector_registry(id) ON DELETE CASCADE
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+            """)
+        else:
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS sector_registry (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    region TEXT NOT NULL,
+                    sector_code TEXT NOT NULL UNIQUE,
+                    sector_name TEXT NOT NULL,
+                    target_type TEXT NOT NULL,
+                    is_etf INTEGER NOT NULL DEFAULT 1,
+                    is_active INTEGER NOT NULL DEFAULT 1,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS sector_constituents (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    sector_id INTEGER NOT NULL,
+                    ticker TEXT NOT NULL,
+                    company_name TEXT DEFAULT '',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE (sector_id, ticker),
+                    FOREIGN KEY (sector_id) REFERENCES sector_registry(id) ON DELETE CASCADE
+                );
+            """)
+
         # Seed capital_ledger with default starting balances if empty
         execute_sql(cursor,
             "SELECT COUNT(*) FROM capital_ledger",
@@ -344,6 +430,62 @@ def init_db():
 
 # Proactively trigger DB initialization on module import
 init_db()
+
+# --- Sector Registry Helpers ---
+
+def get_active_sectors(region_code: str) -> dict:
+    """Gets active sectors and their configurations from the database. Falls back to config.py if empty."""
+    config_data = {}
+    try:
+        with db_session() as conn:
+            cursor = conn.cursor()
+            execute_sql(cursor,
+                "SELECT id, sector_code, sector_name, target_type, is_etf FROM sector_registry WHERE region = ? AND is_active = 1",
+                "SELECT id, sector_code, sector_name, target_type, is_etf FROM sector_registry WHERE region = %s AND is_active = 1",
+                (region_code,)
+            )
+            rows = cursor.fetchall()
+            for row in rows:
+                if isinstance(row, dict):
+                    sec_id, code, name, t_type, is_etf = row["id"], row["sector_code"], row["sector_name"], row["target_type"], row["is_etf"]
+                else:
+                    sec_id, code, name, t_type, is_etf = row
+                
+                # Fetch constituents for constituents mode
+                execute_sql(cursor,
+                    "SELECT ticker FROM sector_constituents WHERE sector_id = ?",
+                    "SELECT ticker FROM sector_constituents WHERE sector_id = %s",
+                    (sec_id,)
+                )
+                c_rows = cursor.fetchall()
+                constituents = []
+                for cr in c_rows:
+                    if isinstance(cr, dict):
+                        constituents.append(cr["ticker"])
+                    elif isinstance(cr, tuple):
+                        constituents.append(cr[0])
+                    else:
+                        constituents.append(cr)
+                
+                config_data[code] = {
+                    "name": name,
+                    "target_type": t_type,
+                    "is_etf": True if is_etf == 1 else False,
+                }
+                if t_type == "constituents":
+                    config_data[code]["constituents"] = constituents
+    except Exception as e:
+        print(f"[!] Warning: Failed to load sectors from database ({e}). Falling back to config.py.")
+        
+    if not config_data:
+        # Fallback to config.py if database is empty or connection fails
+        try:
+            from core.config import REGIONS
+            config_data = REGIONS.get(region_code, {}).get("sector_etfs", {})
+        except Exception as config_ex:
+            print(f"[!] Warning: Fallback to config.py failed ({config_ex})")
+            
+    return config_data
 
 # --- Report Helpers ---
 

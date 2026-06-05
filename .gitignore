@@ -62,3 +62,9 @@ frontend/.env.production.local
 # Reports Output
 backend/core/data/reports/
 backend/core/data/db/
+
+# Cache, Logs, and Temp sync files
+backend/core/data/cache/
+backend/logs/
+backend/core/tools/.last_twse_sync
+backend/scratch/

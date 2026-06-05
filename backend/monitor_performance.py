@@ -82,18 +82,29 @@ def format_roi_padded(roi, pnl, currency, width):
 
 def get_progress_bar(start_date_str, total_days=30):
     """Calculates progress days and renders a beautiful progress bar."""
+    from datetime import timedelta
     try:
-        start_date = datetime.strptime(start_date_str.split(" ")[0], "%Y-%m-%d").date()
+        # Support formats like YYYY-MM-DD_HHMMSS or standard YYYY-MM-DD safely
+        start_date = datetime.strptime(start_date_str[:10], "%Y-%m-%d").date()
     except Exception:
         start_date = date.today()
         
     today = date.today()
-    elapsed = (today - start_date).days + 1
+    
+    # Calculate business days (Monday to Friday) inclusive
+    elapsed = 0
+    if start_date <= today:
+        curr = start_date
+        while curr <= today:
+            if curr.weekday() < 5:  # 0 is Monday, 4 is Friday
+                elapsed += 1
+            curr += timedelta(days=1)
+            
     elapsed = max(1, elapsed)  # Day 1 start
     
     percent = min(1.0, elapsed / total_days)
-    filled_length = int(40 * percent)
-    bar = "█" * filled_length + "░" * (40 - filled_length)
+    filled_length = int(total_days * percent)
+    bar = "█" * filled_length + "░" * (total_days - filled_length)
     
     return elapsed, percent * 100, bar
 
@@ -110,6 +121,14 @@ def save_html_dashboard(
     import json
     from datetime import datetime
     
+    # Calculate pocket-specific returns
+    total_pnl_twd = sum(r["pnl"] for r in closed_recs if r["region"] != "US")
+    total_pnl_usd = sum(r["pnl"] for r in closed_recs if r["region"] == "US")
+    total_twd_pnl = total_pnl_twd + active_twd_pnl
+    total_usd_pnl = total_pnl_usd + active_usd_pnl
+    total_twd_roi = (total_twd_pnl / 1200000.0) * 100
+    total_usd_roi = (total_usd_pnl / 120000.0) * 100
+
     # We resolve logs/dashboard.html dynamically
     dashboard_path = Path(__file__).resolve().parent / "logs" / "dashboard.html"
     
@@ -453,6 +472,14 @@ def save_html_dashboard(
                     <span class="metric-label">未實現損益</span>
                     <span class="metric-value {'value-green' if active_twd_pnl >= 0 else 'value-red'}">{active_twd_pnl:+,.2f} TWD</span>
                 </div>
+                <div class="metric-row">
+                    <span class="metric-label">已實現損益</span>
+                    <span class="metric-value {'value-green' if total_pnl_twd >= 0 else 'value-red'}">{total_pnl_twd:+,.2f} TWD</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">總損益與回報</span>
+                    <span class="metric-value {'value-green' if total_twd_pnl >= 0 else 'value-red'}">{total_twd_pnl:+,.2f} TWD ({total_twd_roi:+.2f}%)</span>
+                </div>
                 
                 <div class="risk-indicators">
                     <div class="risk-box">
@@ -496,6 +523,14 @@ def save_html_dashboard(
                 <div class="metric-row">
                     <span class="metric-label">未實現損益</span>
                     <span class="metric-value {'value-green' if active_usd_pnl >= 0 else 'value-red'}">{active_usd_pnl:+,.2f} USD</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">已實現損益</span>
+                    <span class="metric-value {'value-green' if total_pnl_usd >= 0 else 'value-red'}">{total_pnl_usd:+,.2f} USD</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">總損益與回報</span>
+                    <span class="metric-value {'value-green' if total_usd_pnl >= 0 else 'value-red'}">{total_usd_pnl:+,.2f} USD ({total_usd_roi:+.2f}%)</span>
                 </div>
                 
                 <div class="risk-indicators">
@@ -786,6 +821,14 @@ def main():
     # Calculate NAV (Net Asset Value)
     twd_nav = twd_state["available_capital"] + twd_state["reserved_cash"] + active_twd_invested + active_twd_pnl
     usd_nav = usd_state["available_capital"] + usd_state["reserved_cash"] + active_usd_invested + active_usd_pnl
+
+    # Calculate Pocket-specific realized and total returns
+    total_pnl_twd = sum(r["pnl"] for r in closed_recs if r["region"] != "US")
+    total_pnl_usd = sum(r["pnl"] for r in closed_recs if r["region"] == "US")
+    total_twd_pnl = total_pnl_twd + active_twd_pnl
+    total_usd_pnl = total_pnl_usd + active_usd_pnl
+    total_twd_roi = (total_twd_pnl / 1200000.0) * 100
+    total_usd_roi = (total_usd_pnl / 120000.0) * 100
     
     # Define start date of 30-day sandbox
     if reports:
@@ -806,7 +849,7 @@ def main():
     if reports:
         print(f"  [{prog_bar}] {BOLD}第 {elapsed_days} / 30 天{RESET} ({progress_percent:.1f}% 已完成)")
     else:
-        print(f"  [░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░] {BOLD}第 0 / 30 天{RESET} (等待明早 10:00 週報產出)")
+        print(f"  [░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░] {BOLD}第 0 / 30 天{RESET} (等待明早 10:00 週報產出)")
         
     print(f"\n  • 系統狀態　　: {BOLD}{status_label}{RESET}")
     print(f"  • 週報產出總數: {BOLD}{len(reports)} 份{RESET}")
@@ -820,11 +863,13 @@ def main():
     print(f"  {BOLD}• 台股資金水位 (TWD Pocket)：{RESET}")
     print(f"    - 可投資現金: {BOLD}{twd_state['available_capital']:11,.2f} TWD{RESET} | 保留安全金: {BOLD}{twd_state['reserved_cash']:11,.2f} TWD{RESET}")
     print(f"    - 在庫持股金: {BOLD}{active_twd_invested:11,.2f} TWD{RESET} | 未實現損益: {BOLD}{GREEN if active_twd_pnl >= 0 else RED}{active_twd_pnl:+11,.2f} TWD{RESET}")
+    print(f"    - 已實現損益: {BOLD}{GREEN if total_pnl_twd >= 0 else RED}{total_pnl_twd:+11,.2f} TWD{RESET} | 總損益/回報: {BOLD}{GREEN if total_twd_pnl >= 0 else RED}{total_twd_pnl:+11,.2f} TWD{RESET} ({BOLD}{GREEN if total_twd_roi >= 0 else RED}{total_twd_roi:+.2f}%{RESET})")
     print(f"    - 總資產淨值 (NAV): {BOLD}{BLUE}{twd_nav:14,.2f} TWD{RESET}")
     
     print(f"\n  {BOLD}• 美股資金水位 (USD Pocket)：{RESET}")
     print(f"    - 可投資現金: {BOLD}{usd_state['available_capital']:11,.2f} USD{RESET} | 保留安全金: {BOLD}{usd_state['reserved_cash']:11,.2f} USD{RESET}")
     print(f"    - 在庫持股金: {BOLD}{active_usd_invested:11,.2f} USD{RESET} | 未實現損益: {BOLD}{GREEN if active_usd_pnl >= 0 else RED}{active_usd_pnl:+11,.2f} USD{RESET}")
+    print(f"    - 已實現損益: {BOLD}{GREEN if total_pnl_usd >= 0 else RED}{total_pnl_usd:+11,.2f} USD{RESET} | 總損益/回報: {BOLD}{GREEN if total_usd_pnl >= 0 else RED}{total_usd_pnl:+11,.2f} USD{RESET} ({BOLD}{GREEN if total_usd_roi >= 0 else RED}{total_usd_roi:+.2f}%{RESET})")
     print(f"    - 總資產淨值 (NAV): {BOLD}{BLUE}{usd_nav:14,.2f} USD{RESET}")
     
     # 4. Render Historical Performance (Closed Positions)
@@ -833,8 +878,6 @@ def main():
     if closed_recs:
         win_rate = perf_data["win_rate"] * 100
         avg_roi = perf_data["avg_roi"] * 100
-        total_pnl_twd = sum(r["pnl"] for r in closed_recs if r["region"] != "US")
-        total_pnl_usd = sum(r["pnl"] for r in closed_recs if r["region"] == "US")
         
         # Find best and worst trades
         best_trade = max(closed_recs, key=lambda x: x["performance"])
@@ -846,7 +889,9 @@ def main():
         best_roi_formatted = format_roi_padded(best_trade['performance'], best_trade.get('pnl', 0.0), best_currency, 0).strip()
         worst_roi_formatted = format_roi_padded(worst_trade['performance'], worst_trade.get('pnl', 0.0), worst_currency, 0).strip()
         
-        print(f"  • 交易勝率 (Win Rate)  : {BOLD}{GREEN if win_rate >= 50 else RED}{win_rate:.1f}%{RESET} ({sum(1 for r in closed_recs if r['performance'] > 0)} 勝 / {len(closed_recs)} 敗)")
+        wins = sum(1 for r in closed_recs if r['performance'] > 0)
+        losses = len(closed_recs) - wins
+        print(f"  • 交易勝率 (Win Rate)  : {BOLD}{GREEN if win_rate >= 50 else RED}{win_rate:.1f}%{RESET} ({wins} 勝 / {losses} 敗)")
         print(f"  • 已實現累計損益 (PnL) : {BOLD}台股: {GREEN if total_pnl_twd >= 0 else RED}{total_pnl_twd:+.2f} TWD{RESET} | {BOLD}美股: {GREEN if total_pnl_usd >= 0 else RED}{total_pnl_usd:+.2f} USD{RESET}")
         print(f"  • 每筆平均已實現回報 : {BOLD}{avg_roi:+.2f}%{RESET}")
         print(f"  • 最佳平倉黑馬標的   : {BOLD}{best_trade['ticker']} ({best_trade['company_name']}) {best_roi_formatted}{RESET}")
@@ -1040,6 +1085,13 @@ def main():
             )
         else:
             # 📊 30-Day Sandbox Auto-Pilot Daily Report
+            total_pnl_twd = sum(r["pnl"] for r in closed_recs if r["region"] != "US")
+            total_pnl_usd = sum(r["pnl"] for r in closed_recs if r["region"] == "US")
+            total_twd_pnl = total_pnl_twd + active_twd_pnl
+            total_usd_pnl = total_pnl_usd + active_usd_pnl
+            total_twd_roi = (total_twd_pnl / 1200000.0) * 100
+            total_usd_roi = (total_usd_pnl / 120000.0) * 100
+
             message = (
                 f"📊 【30天沙盒實戰觀測·每日自動監督日報】\n"
                 f"================================\n"
@@ -1051,6 +1103,8 @@ def main():
                 f"  • 可投資現金: {twd_state['available_capital']:,.2f} TWD\n"
                 f"  • 在庫持股金額: {active_twd_invested:,.2f} TWD\n"
                 f"  • 未實現損益: {active_twd_pnl:+,.2f} TWD\n"
+                f"  • 已實現損益: {total_pnl_twd:+,.2f} TWD\n"
+                f"  • 總損益/回報: {total_twd_pnl:+,.2f} TWD ({total_twd_roi:+.2f}%)\n"
             )
             if twd_metrics["data_points"] >= 2:
                 message += (
@@ -1067,6 +1121,8 @@ def main():
                 f"  • 可投資現金: {usd_state['available_capital']:,.2f} USD\n"
                 f"  • 在庫持股金額: {active_usd_invested:,.2f} USD\n"
                 f"  • 未實現損益: {active_usd_pnl:+,.2f} USD\n"
+                f"  • 已實現損益: {total_pnl_usd:+,.2f} USD\n"
+                f"  • 總損益/回報: {total_usd_pnl:+,.2f} USD ({total_usd_roi:+.2f}%)\n"
             )
             if usd_metrics["data_points"] >= 2:
                 message += (
@@ -1083,9 +1139,11 @@ def main():
                 avg_roi = perf_data["avg_roi"] * 100
                 total_pnl_twd = sum(r["pnl"] for r in closed_recs if r["region"] != "US")
                 total_pnl_usd = sum(r["pnl"] for r in closed_recs if r["region"] == "US")
+                wins = sum(1 for r in closed_recs if r['performance'] > 0)
+                losses = len(closed_recs) - wins
                 message += (
                     f"\n🏆 【歷史已實現績效 (Closed)】\n"
-                    f"  • 交易勝率: {win_rate:.1f}% ({sum(1 for r in closed_recs if r['performance'] > 0)}勝/{len(closed_recs)}敗)\n"
+                    f"  • 交易勝率: {win_rate:.1f}% ({wins}勝/{losses}敗)\n"
                     f"  • 平均已實現 ROI: {avg_roi:+.2f}%\n"
                     f"  • 累計損益: TWD {total_pnl_twd:+,.0f} | USD {total_pnl_usd:+,.2f}\n"
                 )

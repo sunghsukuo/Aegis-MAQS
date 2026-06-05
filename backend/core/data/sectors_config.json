@@ -1,0 +1,521 @@
+{
+    "US": {
+        "XLK": {
+            "name": "科技 (Technology)",
+            "target_type": "constituents",
+            "is_etf": true,
+            "constituents": [
+                "AAPL",
+                "ADBE",
+                "ADI",
+                "AMAT",
+                "AMD",
+                "AVGO",
+                "CRM",
+                "IBM",
+                "INTU",
+                "KLAC",
+                "LRCX",
+                "MSFT",
+                "MU",
+                "NOW",
+                "NVDA",
+                "ORCL",
+                "PANW",
+                "QCOM",
+                "SNPS",
+                "TXN"
+            ]
+        },
+        "XLF": {
+            "name": "金融 (Financials)",
+            "target_type": "proxy",
+            "is_etf": true,
+            "constituents": [
+                "JPM", "BRK-B", "V", "MA", "BAC", "WFC", "MS", "GS", "SCHW", "C", 
+                "BLK", "AXP", "BX", "CB", "SPGI", "MMC", "PGR", "MET", "AON", "USB"
+            ]
+        },
+        "XLE": {
+            "name": "能源 (Energy)",
+            "target_type": "proxy",
+            "is_etf": true,
+            "constituents": [
+                "XOM", "CVX", "COP", "SLB", "EOG", "MPC", "PSX", "VLO", "OXY", "WMB", 
+                "HAL", "BKR", "HES", "KMI", "ONEOK", "DVN", "CTRA", "APA", "FANG", "MRO"
+            ]
+        },
+        "XLV": {
+            "name": "醫療保健 (Healthcare)",
+            "target_type": "constituents",
+            "is_etf": true,
+            "constituents": [
+                "ABBV",
+                "ABT",
+                "AMGN",
+                "BMY",
+                "BSX",
+                "CI",
+                "CVS",
+                "ELV",
+                "GILD",
+                "HCA",
+                "ISRG",
+                "JNJ",
+                "LLY",
+                "MDT",
+                "MRK",
+                "PFE",
+                "REGN",
+                "SYK",
+                "UNH",
+                "VRTX"
+            ]
+        },
+        "XLY": {
+            "name": "非必須消費 (Consumer Discretionary)",
+            "target_type": "constituents",
+            "is_etf": true,
+            "constituents": [
+                "AMZN",
+                "AZO",
+                "BKNG",
+                "CMG",
+                "DHI",
+                "F",
+                "GM",
+                "HD",
+                "HLT",
+                "LOW",
+                "LVS",
+                "MAR",
+                "MCD",
+                "NKE",
+                "ORLY",
+                "PHM",
+                "SBUX",
+                "TJX",
+                "TSLA",
+                "YUM"
+            ]
+        },
+        "XLI": {
+            "name": "工業 (Industrial)",
+            "target_type": "constituents",
+            "is_etf": true,
+            "constituents": [
+                "BA",
+                "CAT",
+                "CPRT",
+                "CSX",
+                "DE",
+                "EMR",
+                "ETN",
+                "FDX",
+                "GD",
+                "GE",
+                "HON",
+                "ITW",
+                "LMT",
+                "NOC",
+                "NSC",
+                "PH",
+                "RTX",
+                "UNP",
+                "UPS",
+                "WM"
+            ]
+        },
+        "XLP": {
+            "name": "必須消費 (Consumer Staples)",
+            "target_type": "constituents",
+            "is_etf": true,
+            "constituents": [
+                "ADM",
+                "CHD",
+                "CL",
+                "COST",
+                "EL",
+                "GIS",
+                "HSY",
+                "K",
+                "KDP",
+                "KO",
+                "KR",
+                "MDLZ",
+                "MO",
+                "PEP",
+                "PG",
+                "PM",
+                "STZ",
+                "SYY",
+                "TSN",
+                "WMT"
+            ]
+        },
+        "XLB": {
+            "name": "原物料 (Materials)",
+            "target_type": "constituents",
+            "is_etf": true,
+            "constituents": [
+                "ALB",
+                "APD",
+                "CF",
+                "CTVA",
+                "DD",
+                "DOW",
+                "ECL",
+                "FCX",
+                "FMC",
+                "IFF",
+                "LIN",
+                "MLM",
+                "MOS",
+                "NEM",
+                "NUE",
+                "PPG",
+                "SHW",
+                "VMC"
+            ]
+        },
+        "XLU": {
+            "name": "公用事業 (Utilities)",
+            "target_type": "constituents",
+            "is_etf": true,
+            "constituents": [
+                "AEP",
+                "ATO",
+                "AWK",
+                "CEG",
+                "CNP",
+                "D",
+                "DUK",
+                "ED",
+                "EIX",
+                "ES",
+                "ETR",
+                "EXC",
+                "FE",
+                "NEE",
+                "PCG",
+                "PEG",
+                "SO",
+                "SRE",
+                "WEC",
+                "XEL"
+            ]
+        },
+        "XLC": {
+            "name": "通訊服務 (Communication Services)",
+            "target_type": "constituents",
+            "is_etf": true,
+            "constituents": [
+                "CHTR",
+                "CMCSA",
+                "DIS",
+                "EA",
+                "FOXA",
+                "GOOGL",
+                "IPG",
+                "LYV",
+                "META",
+                "MTCH",
+                "NFLX",
+                "NWSA",
+                "OMC",
+                "PARA",
+                "T",
+                "TMUS",
+                "TTWO",
+                "VZ",
+                "WBD"
+            ]
+        },
+        "XLRE": {
+            "name": "房地產 (Real Estate)",
+            "target_type": "constituents",
+            "is_etf": true,
+            "constituents": [
+                "AMT",
+                "ARE",
+                "AVB",
+                "BXP",
+                "CBRE",
+                "CCI",
+                "DLR",
+                "EQIX",
+                "EQR",
+                "EXR",
+                "INVH",
+                "O",
+                "PLD",
+                "PSA",
+                "SBAC",
+                "SPG",
+                "VICI",
+                "VTR",
+                "WELL",
+                "WY"
+            ]
+        }
+    },
+    "Taiwan": {
+        "0050.TW": {
+            "name": "元大台灣50 (Broad Market)",
+            "target_type": "constituents",
+            "is_etf": true,
+            "constituents": [
+                "1216.TW",
+                "2303.TW",
+                "2308.TW",
+                "2317.TW",
+                "2324.TW",
+                "2330.TW",
+                "2357.TW",
+                "2382.TW",
+                "2412.TW",
+                "2454.TW",
+                "2603.TW",
+                "2880.TW",
+                "2881.TW",
+                "2882.TW",
+                "2884.TW",
+                "2885.TW",
+                "2886.TW",
+                "2891.TW",
+                "2892.TW",
+                "2912.TW",
+                "3045.TW",
+                "3231.TW",
+                "3711.TW",
+                "5871.TW"
+            ]
+        },
+        "0051.TW": {
+            "name": "元大台灣中型100 (Mid-Cap Market)",
+            "target_type": "constituents",
+            "is_etf": true,
+            "constituents": [
+                "1326.TW",
+                "1590.TW",
+                "2313.TW",
+                "2337.TW",
+                "2356.TW",
+                "2376.TW",
+                "2379.TW",
+                "2404.TW",
+                "3034.TW",
+                "3036.TW",
+                "3044.TW",
+                "3189.TW",
+                "3443.TW",
+                "3481.TW",
+                "3533.TW",
+                "3665.TW",
+                "3702.TW",
+                "4938.TW",
+                "4958.TW",
+                "6239.TW",
+                "6415.TW",
+                "6446.TW",
+                "6515.TW",
+                "6770.TW",
+                "8046.TW"
+            ]
+        },
+        "0052.TW": {
+            "name": "富邦科技 (Tech Sector)",
+            "target_type": "constituents",
+            "is_etf": true,
+            "constituents": [
+                "2303.TW",
+                "2308.TW",
+                "2317.TW",
+                "2330.TW",
+                "2345.TW",
+                "2357.TW",
+                "2376.TW",
+                "2379.TW",
+                "2382.TW",
+                "2408.TW",
+                "2449.TW",
+                "2454.TW",
+                "3034.TW",
+                "3044.TW",
+                "3231.TW",
+                "3711.TW"
+            ]
+        },
+        "00892.TW": {
+            "name": "富邦台灣半導體 (Semiconductor Sector)",
+            "target_type": "constituents",
+            "is_etf": true,
+            "constituents": [
+                "2330.TW",
+                "2379.TW",
+                "2454.TW",
+                "2455.TW",
+                "3034.TW",
+                "3529.TWO",
+                "3711.TW",
+                "5274.TWO",
+                "5434.TW",
+                "6187.TWO",
+                "6223.TWO",
+                "6515.TW",
+                "7769.TW"
+            ]
+        },
+        "0055.TW": {
+            "name": "元大MSCI金融 (Financials Sector)",
+            "target_type": "constituents",
+            "is_etf": true,
+            "constituents": [
+                "2834.TW",
+                "2880.TW",
+                "2881.TW",
+                "2882.TW",
+                "2884.TW",
+                "2885.TW",
+                "2886.TW",
+                "2887.TW",
+                "2890.TW",
+                "2891.TW",
+                "2892.TW",
+                "5876.TW",
+                "5880.TW"
+            ]
+        },
+        "1301.TW": {
+            "name": "台塑 (Materials/Old Economy Proxy)",
+            "target_type": "constituents",
+            "is_etf": true,
+            "constituents": [
+                "1101.TW",
+                "1102.TW",
+                "1216.TW",
+                "1301.TW",
+                "1303.TW",
+                "1326.TW",
+                "1402.TW",
+                "1504.TW",
+                "1605.TW",
+                "2002.TW",
+                "2105.TW",
+                "6505.TW"
+            ]
+        },
+        "2603.TW": {
+            "name": "長榮 (Shipping/Logistics)",
+            "target_type": "constituents",
+            "is_etf": true,
+            "constituents": [
+                "2603.TW",
+                "2606.TW",
+                "2609.TW",
+                "2610.TW",
+                "2615.TW",
+                "2618.TW",
+                "2637.TW"
+            ]
+        },
+        "1519.TW": {
+            "name": "華城 (Green Energy/Power)",
+            "target_type": "constituents",
+            "is_etf": true,
+            "constituents": [
+                "1503.TW",
+                "1513.TW",
+                "1514.TW",
+                "1519.TW",
+                "3708.TW",
+                "6806.TW",
+                "9958.TW"
+            ]
+        },
+        "6446.TW": {
+            "name": "藥華藥 (Biotech/Healthcare)",
+            "target_type": "constituents",
+            "is_etf": true,
+            "constituents": [
+                "1789.TW",
+                "1795.TW",
+                "3176.TW",
+                "4108.TW",
+                "4123.TW",
+                "6446.TW",
+                "6472.TW"
+            ]
+        },
+        "0056.TW": {
+            "name": "元大高股息 (High Dividend Yield)",
+            "target_type": "constituents",
+            "is_etf": true,
+            "constituents": [
+                "2301.TW",
+                "2324.TW",
+                "2357.TW",
+                "2379.TW",
+                "2382.TW",
+                "2408.TW",
+                "2409.TW",
+                "2454.TW",
+                "2603.TW",
+                "2886.TW",
+                "2891.TW",
+                "3034.TW",
+                "3044.TW",
+                "3231.TW",
+                "3481.TW",
+                "3711.TW"
+            ]
+        },
+        "2542.TW": {
+            "name": "興富發 (Real Estate/Construction)",
+            "target_type": "constituents",
+            "is_etf": true,
+            "constituents": [
+                "2542.TW",
+                "2501.TW",
+                "2520.TW",
+                "2548.TW",
+                "5522.TW",
+                "5534.TW",
+                "2348.TW"
+            ]
+        },
+        "3017.TW": {
+            "name": "奇鋐 (AI Cooling & Optoelectronics)",
+            "target_type": "constituents",
+            "is_etf": true,
+            "constituents": [
+                "3017.TW",
+                "3324.TWO",
+                "3013.TW",
+                "8210.TW",
+                "3450.TW",
+                "3081.TWO",
+                "3163.TWO",
+                "4979.TWO",
+                "6451.TW"
+            ]
+        },
+        "3131.TWO": {
+            "name": "弘塑 (Semiconductor Materials & Equipments)",
+            "target_type": "constituents",
+            "is_etf": true,
+            "constituents": [
+                "3131.TWO",
+                "3583.TW",
+                "6187.TWO",
+                "3680.TWO",
+                "3413.TW",
+                "5434.TW",
+                "4770.TW",
+                "4755.TW",
+                "5443.TWO",
+                "2467.TW"
+            ]
+        }
+    }
+}

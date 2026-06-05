@@ -106,7 +106,13 @@ def get_sector_rankings(region_code: str) -> list:
         return []
         
     rankings = []
-    sector_etfs = region_info["sector_etfs"]
+    
+    # Load sectors dynamically from database (Phase 5 Dynamic Config)
+    try:
+        import core.db_manager as db
+        sector_etfs = db.get_active_sectors(region_code)
+    except Exception:
+        sector_etfs = region_info.get("sector_etfs", {})
     
     # Calculate performance for each sector ETF using retried helper
     for etf_ticker, info_val in sector_etfs.items():
@@ -243,11 +249,19 @@ def _get_stock_financials_raw(ticker: str) -> dict:
     
     # Check if the sector config explicitly flags this as a stock (is_etf: False)
     is_etf_in_config = True
-    for r_info in REGIONS.values():
-        sec_config = r_info.get("sector_etfs", {}).get(ticker.upper())
-        if isinstance(sec_config, dict) and sec_config.get("is_etf") is False:
-            is_etf_in_config = False
-            break
+    try:
+        import core.db_manager as db
+        for r_code in REGIONS.keys():
+            sec_config = db.get_active_sectors(r_code).get(ticker.upper())
+            if isinstance(sec_config, dict) and sec_config.get("is_etf") is False:
+                is_etf_in_config = False
+                break
+    except Exception:
+        for r_info in REGIONS.values():
+            sec_config = r_info.get("sector_etfs", {}).get(ticker.upper())
+            if isinstance(sec_config, dict) and sec_config.get("is_etf") is False:
+                is_etf_in_config = False
+                break
             
     if quote_type == "ETF":
         is_etf = True
@@ -255,7 +269,14 @@ def _get_stock_financials_raw(ticker: str) -> dict:
         is_etf = False
     else:
         # Fallback if yfinance quote_type is missing/rate-limited
-        configured_etfs = {etf.upper() for r in REGIONS.values() for etf in r.get("sector_etfs", {}).keys()}
+        configured_etfs = set()
+        try:
+            import core.db_manager as db
+            for r_code in REGIONS.keys():
+                configured_etfs.update(k.upper() for k in db.get_active_sectors(r_code).keys())
+        except Exception:
+            configured_etfs = {etf.upper() for r in REGIONS.values() for etf in r.get("sector_etfs", {}).keys()}
+            
         if ticker.upper() in configured_etfs and is_etf_in_config:
             is_etf = True
         
@@ -263,9 +284,10 @@ def _get_stock_financials_raw(ticker: str) -> dict:
     raw_name = info.get("longName") or info.get("shortName") or ticker
     if ticker.endswith(".TW") or ticker.endswith(".TWO"):
         ticker_num = ticker.split(".")[0]
-        from core.config import TAIWAN_NAMES
-        if ticker_num in TAIWAN_NAMES:
-            raw_name = f"{TAIWAN_NAMES[ticker_num]} ({raw_name})"
+        from core.tools.taiwan_stock_names import get_taiwan_stock_name
+        db_name = get_taiwan_stock_name(ticker_num)
+        if db_name:
+            raw_name = f"{db_name} ({raw_name})"
             
     # Parse financials safely
     financials = {
@@ -288,6 +310,12 @@ def _get_stock_financials_raw(ticker: str) -> dict:
         "fifty_day_sma": fast_info.get("fiftyDayAverage") or info.get("fiftyDayAverage"),
         "two_hundred_day_sma": fast_info.get("twoHundredDayAverage") or info.get("twoHundredDayAverage"),
         "recommendation_consensus": info.get("recommendationKey"),  # e.g., 'buy', 'strong_buy'
+        # Wall Street Analyst Targets
+        "analyst_target_mean": info.get("targetMeanPrice"),
+        "analyst_target_high": info.get("targetHighPrice"),
+        "analyst_target_low": info.get("targetLowPrice"),
+        "analyst_count": info.get("numberOfAnalystOpinions"),
+        "analyst_mean_score": info.get("recommendationMean"),
         # ETF specific fields
         "total_assets": info.get("totalAssets") or info.get("navPrice"),
         "dividend_yield": info.get("yield") or info.get("trailingAnnualDividendYield"),
