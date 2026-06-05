@@ -75,17 +75,17 @@ graph TD
     Note["💡 顏色圖例說明：【 深藍色節點 = 定量物理防線 】 ➔ 【 暖橘色節點 = 定性智慧大腦 】"]:::system
 
     %% 順序執行節點
-    S1["1. 板塊強勢排序 (Sector Sort)<br>yf_tool.get_sector_rankings"]:::quant
-    S2["2. 候選個股篩選 (Stock Screening)<br>QuantScreener.screen_stocks"]:::quant
-    S3["3. 輿情消息把關 (News Scanning)<br>NewsAgent"]:::qual
-    S4["4. 企業基本面估值 (Moat & FCF)<br>FundamentalAgent"]:::qual
+    S1["1. 板塊強勢排序"]:::quant
+    S2["2. 候選個股篩選"]:::quant
+    S3["3. 輿情消息把關"]:::qual
+    S4["4. 企業基本面估值"]:::qual
     
     %% 風險防線分支 (5A與5B在此匯合)
-    S5A["5A. 波動防線統計 (Risk Boundary)<br>Beta-adjusted ATR Formula"]:::quant
-    S5B["5B. 操作價格微調 (Micro-Tuning)<br>FundamentalAgent 1.5% Bounds"]:::qual
+    S5A["5A. 波動防線統計"]:::quant
+    S5B["5B. 操作價格微調"]:::qual
     
-    S6["6. 預算分配與實體扣款 (Ledger)<br>BudgetAgent & DB Account"]:::quant
-    S7["7. 反思覆盤與 Prompt 演化 (Evolution)<br>ReflectionAgent & Meta-Optimizer"]:::qual
+    S6["6. 預算分配與實體扣款"]:::quant
+    S7["7. 反思覆盤與自適應演化"]:::qual
 
     %% 連線關係（線性管線）
     Note --> S1
@@ -107,10 +107,10 @@ graph TD
 | 決策階段 | 🛡️ 定量物理防線 (負責模組/工具) | 🧠 大模型定性決策 (負責代理人/Agent) |
 | :--- | :--- | :--- |
 | **1. 板塊趨勢選擇** | **100% 定量過濾**<br>👉 `yf_tool.get_sector_rankings`<br>*板塊 ETF 週回報率與動能定量排序* | **資金流向解讀**<br>👉 **`MarketAgent` (板塊動能分析師)**<br>*解讀巨觀資金面成因與板塊強勢邏輯* |
-| **2. 候選個股篩選** | **100% 定量篩選**<br>👉 `QuantScreener.screen_stocks`<br>*5日價格動能、量能噴發因子、市值與日均量門檻* | **（無）**<br>*此階段不調用大模型，100% 物理過濾，極速降噪並節省 Token 成本* |
+| **2. 候選個股篩選** | **100% 定量篩選**<br>👉 `ScreenerFactory` 與策略模組 (`core/screener/`) 如 `MomentumScreener` 或 `ReversionScreener`<br>*5日價格動能、量能噴發因子、RSI/均線位階與市值日均量門檻* | **（無）**<br>*此階段不調用大模型，100% 物理過濾，極速降噪並節省 Token 成本* |
 | **3. 個股消息面把關** | **數據基礎提供**<br>👉 `search_tool.get_stock_news`<br>*Scraper 即時網頁新聞檢索模組* | **輿情純度與黑天鵝預警**<br>👉 **`NewsAgent` (輿情消息分析師)**<br>*解讀新聞是實質利多還是投機炒作，預警黑天鵝* |
 | **4. 企業基本面估值** | **數據基礎提供**<br>👉 `yf_tool.get_stock_financials`<br>*自動拉取財務三表、估值指標與債務結構* | **護城河剖析與估值陷阱判定**<br>👉 **`FundamentalAgent` (基本面估值師)**<br>*動態分析 PEG 廉價度、企業定價權、財務健康度* |
-| **5. 風險防線設定** | **波動度物理邊界統計**<br>👉 `yf_tool.get_stock_financials`<br>*歷史 Beta 與 ATR-14 波動停損/停利參考價* | **最終操作區間與投資評級判定**<br>👉 **`FundamentalAgent` (基本面估值師)**<br>*結合大盤情境與反思指令，微調停損點並決定評級* |
+| **5. 風險防線設定** | **波動度物理邊界統計**<br>👉 `risk_manager.py` (波動風控模組)<br>*根據市場狀態自適應計算 Beta 與 ATR-14 波動停損/停利參考價* | **最終操作區間與投資評級判定**<br>👉 **`FundamentalAgent` (基本面估值師)**<br>*結合大盤情境與反思指令，微調停損點並決定評級* |
 | **6. 資金預算分配** | **持股對帳與記帳物理防線**<br>👉 `db_manager.py` & `check_portfolio.py`<br>*帳戶每日 NAV 智慧對帳與自動平倉控制* | **主觀勝率折價與動態預算配置**<br>👉 **`BudgetAgent` (預算管理與持倉代理人)**<br>*讀取個股定性評級，動態扣除可用餘額與分配購買股數* |
 | **7. 覆盤反思與演化** | **已平倉交易 ROI 追蹤**<br>👉 `db.get_recent_inference_logs_with_roi`<br>*真實交易績效與推論日誌資料庫綁定技術* | **定性反思與 Prompt 版本遞增升級**<br>👉 **`ReflectionAgent` (自我修法師)**<br>*每週反思定性指令*<br>👉 **`MetaPromptOptimizer` (自適應演化引擎)**<br>*Meta-Reflection 生成優化 Prompt 並升級版本* |
 
@@ -124,7 +124,7 @@ graph TD
 系統拋棄市場上粗暴的「統一跌 8% 停損、漲 15% 停利」設計，改採**「Beta 調整之 ATR（真實波幅均值）波動通道算法」**進行物理錨定，使風險防守自動適應個股的自然波動率。
 
 #### 📐 計算公式
-系統在計算波動停損停利參考價時，遵循以下數學關係：
+系統在計算波動停損停利參考價時，遵循以下數學關係（自適應市場大盤情境）：
 ```text
 # Step A: 限制 Beta 邊界 (Winsorization) 以平滑極端值，防止異常個股扭曲通道
 beta_bounded = max(0.3, min(Beta, 3.0))
@@ -132,11 +132,11 @@ beta_bounded = max(0.3, min(Beta, 3.0))
 # Step B: 進行開根號統計縮放 (Square Root Scaling)
 beta_adj = sqrt(beta_bounded)
 
-# Step C: 計算動態波動乘數
-# k1: 停損乘數 (以 2.0 倍 ATR 日震幅為基礎)
-# k2: 停利乘數 (以 3.0 倍 ATR 日震幅為基礎)
-k1 = 2.0 * beta_adj
-k2 = 3.0 * beta_adj
+# Step C: 計算動態波動乘數 (依據 Regime 自適應調校)
+# - MOMENTUM_TREND (動量趨勢市): k1 = 2.0 * beta_adj, k2 = 3.0 * beta_adj
+# - MEAN_REVERSION_RANGE / VOLATILE_RANGEBOUND (均值回歸/區間震盪市): k1 = 1.2 * beta_adj, k2 = 1.5 * beta_adj
+k1 = 2.0 * beta_adj (趨勢市) 或 1.2 * beta_adj (震盪市)
+k2 = 3.0 * beta_adj (趨勢市) 或 1.5 * beta_adj (震盪市)
 
 # Step D: 計算建議停損與停利參考價 (定量統計錨定底座)
 Suggested_Stop_Loss = Buy_Price - (k1 * ATR_14)
@@ -144,11 +144,17 @@ Suggested_Target_Price = Buy_Price + (k2 * ATR_14)
 ```
 
 #### 備援安全防線 (Fallback Line)
-若因個股新上市或數據庫暫時缺失而無 ATR_14 或 Beta 數據時，系統強制套用以下物理防線：
-```text
-Stop_Loss_Fallback = Buy_Price * 0.92  (固定 8% 停損)
-Target_Price_Fallback = Buy_Price * 1.15  (固定 15% 停利)
-```
+若因數據庫暫時缺失而無 ATR_14 或 Beta 數據時，系統根據情境套用以下物理防線：
+- **動量趨勢市 (`MOMENTUM_TREND`)**:
+  ```text
+  Stop_Loss_Fallback = Buy_Price * 0.92  (固定 8% 停損)
+  Target_Price_Fallback = Buy_Price * 1.15  (固定 15% 停利)
+  ```
+- **均值回歸/區間震盪市 (`MEAN_REVERSION_RANGE` 或 `VOLATILE_RANGEBOUND`)**:
+  ```text
+  Stop_Loss_Fallback = Buy_Price * 0.95  (固定 5% 停損)
+  Target_Price_Fallback = Buy_Price * 1.08  (固定 8% 停利)
+  ```
 
 #### 🧠 大模型定性 1.5% 彈性微調
 上述物理錨定價算出後，會作為 Context 灌入 `FundamentalAgent` 中。大模型被施加了強剛性紀律約束：

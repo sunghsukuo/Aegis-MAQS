@@ -65,3 +65,123 @@ class ReflectionAgent(BaseAgent):
 請依據上述的歷史真實損益數據，進行冷酷客觀的回測與反思，並產出給本週分析師的「自我修正調整令」。
 """
         return self.run(prompt)
+
+    @classmethod
+    def evolve_prompts(cls):
+        """
+        自適應 Prompt 演化引擎 (Self-Reflective Prompt Optimization Engine)
+        分析最近的已平倉交易紀錄與其實際投資績效 (ROI)，
+        針對表現欠佳或估值失真的 FundamentalAgent 進行 Prompt 自我演化與版本升級。
+        """
+        import json
+        import core.db_manager as db
+        from core.agents.base_agent import BaseAgent
+        
+        print("[*] [自適應 Prompt 演化] 正在啟動自適應 Prompt 演化引擎...")
+        try:
+            # 1. 獲取 FundamentalAgent 的最近已平倉交易推論日誌與 ROI
+            agent_name = "FundamentalAgent"
+            logs = db.get_recent_inference_logs_with_roi(agent_name, limit=10)
+            
+            # 2. 進行冷啟動防禦檢查 (Cold-Start Defense Check)
+            if len(logs) < 2:
+                print(f"[*] [自適應 Prompt 演化] 目前已平倉交易記錄為 {len(logs)} 筆，少於演化閾值 2 筆，跳過本次 Prompt 演化。")
+                return
+                
+            print(f"[*] [自適應 Prompt 演化] 偵測到 {len(logs)} 筆具備真實投資績效 (ROI) 的交易紀錄，開始進行多維度效能分析...")
+            
+            # 3. 獲取當前活躍的系統提示詞
+            active_prompt_data = db.get_active_prompt(agent_name)
+            if not active_prompt_data:
+                print("[!] [自適應 Prompt 演化] 無法自資料庫獲取當前活躍的 Prompt，跳過演化。")
+                return
+                
+            curr_prompt = active_prompt_data["system_prompt"]
+            curr_version = active_prompt_data["version"]
+            
+            # 4. 區分成功與失敗案例以進行對比學習
+            success_cases = []
+            failure_cases = []
+            for log in logs:
+                case_desc = {
+                    "ticker": log["ticker"],
+                    "roi": f"{log['roi'] * 100:.2f}%",
+                    "recommendation_input_context": log["input_prompt"],
+                    "recommendation_response": log["output_response"]
+                }
+                if log["roi"] > 0:
+                    success_cases.append(case_desc)
+                else:
+                    failure_cases.append(case_desc)
+                    
+            print(f"[*] [自適應 Prompt 演化] 成功交易案例：{len(success_cases)} 筆 | 失敗交易案例：{len(failure_cases)} 筆")
+            
+            # 5. 調度 Meta-Agent 作為 Prompt 優化工程師
+            print("[*] [自適應 Prompt 演化] 正在初始化 MetaPromptOptimizer 代理人進行對比反思...")
+            
+            meta_instruction = (
+                "你是一位頂尖的金融大模型 Prompt 工程師與量化投資策略專家。你的任務是分析 FundamentalAgent 過去的分析案例（成功與失敗交易），"
+                "找出其估值偏差、預測漏洞或思維盲點，並優化其 system_prompt。請只輸出新的、優化後的完整 system_prompt，"
+                "絕對不要包含 any 額外的 Markdown 包裹標記（如 ```markdown 或 ```）或前言、解釋文字。你的輸出必須能夠直接做為 system_prompt 使用。\n"
+                "你必須保留原 prompt 的核心結構與功能（如獲利能力、估值、技術位階、ATR 停損停利規則、輸出 Markdown 格式等），並將本週最新的修正與演化方針以增量方式融入其中。"
+            )
+            
+            meta_optimizer = BaseAgent(
+                name="MetaPromptOptimizer",
+                role="Meta-Prompt Optimizer",
+                system_instruction=meta_instruction
+            )
+            
+            # 組裝對比學習的推論上下文
+            success_text = json.dumps(success_cases, ensure_ascii=False, indent=2)
+            failure_text = json.dumps(failure_cases, ensure_ascii=False, indent=2)
+            
+            evolution_prompt = f"""
+請根據以下提供的資訊，演化並優化 FundamentalAgent 的系統提示詞 (System Prompt)。
+
+【當前活躍之 System Prompt】：
+{curr_prompt}
+
+【近期成功的分析案例 (ROI > 0)】：
+{success_text}
+
+【近期失敗的分析案例 (ROI <= 0)】：
+{failure_text}
+
+請透過對比成功與失敗案例的差異，進行多維度的盲點優化。請在優化後的提示詞中特別強調：
+1. 避開那些容易造成高回撤或追高的估值偏好。
+2. 進一步嚴格化那些導致失敗案例的財務健康度指標。
+
+優化後，請直接回覆優化後的「完整 system_prompt 內容」，絕對不要包含任何包裹用的 ``` 或 markdown 標籤，也不要有前言或解釋。
+"""
+            new_prompt = meta_optimizer.run(evolution_prompt)
+            if not new_prompt or len(new_prompt.strip()) < 500:
+                print("[!] [自適應 Prompt 演化] 大模型輸出的新 Prompt 長度過短，可能生成失敗。放棄本次演化。")
+                return
+                
+            # 解析版本號
+            try:
+                major, minor, patch = map(int, curr_version.replace("v", "").split("."))
+                patch += 1
+                new_version = f"v{major}.{minor}.{patch}"
+            except Exception:
+                new_version = "v1.0.1"
+                
+            # 寫入 Prompt 註冊表
+            db.save_prompt_registry(agent_name, new_prompt.strip(), new_version)
+            print(f"[✓] [自適應 Prompt 演化] 恭喜！系統 Prompt 已自動由 {curr_version} 成功演化升級至 {new_version}！")
+            
+            # 儲存 Prompt 進化推論日誌
+            db.save_agent_inference_log(
+                rec_id=None,
+                agent_name="MetaPromptOptimizer",
+                ticker=None,
+                input_prompt=meta_optimizer.last_prompt,
+                output_response=new_prompt,
+                prompt_version=curr_version
+            )
+            
+        except Exception as e:
+            print(f"[!] [自適應 Prompt 演化] Prompt 演化中途出錯: {e}")
+            raise e
+
