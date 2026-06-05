@@ -465,7 +465,7 @@ def save_html_dashboard(
                     <span class="metric-value">{twd_state['available_capital']:,.2f} / {twd_state['reserved_cash']:,.2f} TWD</span>
                 </div>
                 <div class="metric-row">
-                    <span class="metric-label">在製品持股金額</span>
+                    <span class="metric-label">目前持股成本</span>
                     <span class="metric-value">{active_twd_invested:,.2f} TWD</span>
                 </div>
                 <div class="metric-row">
@@ -517,7 +517,7 @@ def save_html_dashboard(
                     <span class="metric-value">{usd_state['available_capital']:,.2f} / {usd_state['reserved_cash']:,.2f} USD</span>
                 </div>
                 <div class="metric-row">
-                    <span class="metric-label">在製品持股金額</span>
+                    <span class="metric-label">目前持股成本</span>
                     <span class="metric-value">{active_usd_invested:,.2f} USD</span>
                 </div>
                 <div class="metric-row">
