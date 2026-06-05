@@ -191,6 +191,16 @@ def run_portfolio_check(report_date: str, regions: list = None):
                 )
                 notifier.send_message(msg)
             else:
+                # Still active, check and apply trailing stop (breakeven) protection!
+                tech_metrics = yf_tool.calculate_technical_metrics(ticker)
+                atr_14 = tech_metrics.get("atr_14")
+                if atr_14:
+                    from core.risk.trailing_stop import check_and_apply_breakeven_stop
+                    updated = check_and_apply_breakeven_stop(rec, current_price, atr_14)
+                    if updated:
+                        rec["stop_loss"] = recommend_price
+                        stop_loss = recommend_price
+                        
                 # Still active, calculate and update current unrealized ROI & PnL
                 shares = rec.get("shares", 0.0)
                 unrealized_pnl = shares * (current_price - recommend_price)
