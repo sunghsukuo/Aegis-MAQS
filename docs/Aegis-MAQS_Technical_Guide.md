@@ -9,27 +9,73 @@
 
 ## 📂 一、 系統運行環境與目錄結構
 
-Aegis-MAQS 系統核心模組位於 `backend/` 目錄中，並遵循以下結構設計：
+Aegis-MAQS 系統核心模組位於 `backend/` 目錄中，其完整且詳細的樹狀架構如下：
 
 ```text
 backend/
-├── core/
-│   ├── agents/             # 多代理人決策核心 (Base, Budget, Fundamental, Macro, Market, News, Reflection, Writer)
-│   ├── tools/              # 物理輔助工具 (Screener, Yahoo Finance Scraper, Web Search, Line Notifier 等)
-│   ├── data/
-│   │   ├── cache/          # API 與網頁抓取之 12 小時 JSON 本地快取
-│   │   ├── db/             # 本地 SQLite 資料庫備援儲存目錄
-│   │   ├── reports/        # 投研週報本機備用儲存目錄
-│   │   └── sectors_config.json # 本地板塊與成分股備援組態
-│   ├── config.py           # 全域系統組態與路徑/環境變數載入器
-│   └── db_manager.py       # 資料庫 Schema 初始化與 SQL 抽象介面 (支援 MySQL & SQLite 雙模)
-├── logs/                   # 系統執行日誌與智慧對帳 HTML 看板 (dashboard.html)
-├── scratch/                # 系統測試、提示詞演化回滾與臨時維護測試腳本
-├── aegis_cli.py            # 系統主入口：個股/板塊投研分析與報告生成 (Query / Pipeline)
+├── .env                    # 全域環境變數配置 (包含 Gemini API、LINE Token、MySQL 連線資訊)
+├── .env.template           # 環境變數範本檔
+├── Pipfile                 # pipenv 套件依賴管理檔
+├── Pipfile.lock            # 套件相依性鎖定檔
+├── aegis_cli.py            # CLI 命令入口：僅進行參數解析與指令分發，業務邏輯已解耦移出 (Thin Wrapper)
 ├── check_portfolio.py      # 持倉對帳與物理波動 ATR/Beta 停損平倉腳本 (0-Token 風控哨兵)
 ├── monitor_performance.py  # 30天沙盒實戰績效監控、LINE 日報推送與網頁看板渲染
 ├── sync_data.py            # 歷史淨值與對帳數據之外部同步與校正工具
-└── sync_sectors_config.py  # 板塊與成分股組態之雙向資料庫同步工具 (JSON ➔ DB)
+├── sync_sectors_config.py  # 板塊與成分股組態之雙向資料庫同步工具 (JSON ➔ DB)
+├── test_agent_system.py    # 系統整合測試腳本 (Agent 連接與推論測試)
+├── test_mysql.py           # MySQL 連線與讀寫測試腳本
+├── test_utils.py           # 系統核心工具與風控單元測試腳本 (Regression Testing)
+├── logs/                   # 系統執行日誌與智慧對帳 HTML 看板
+│   ├── check_portfolio.log    # 風控哨兵執行日誌
+│   ├── dashboard.html         # 投研與帳戶 NAV 視覺化對帳看板
+│   ├── generate_report.log    # 週報生成管線執行日誌
+│   └── monitor_performance.log# 績效監控執行日誌
+├── scratch/                # 系統測試、提示詞演化回滾與臨時維護測試腳本 (不影響正式運行)
+└── core/
+    ├── agents/             # 多代理人決策核心 (LLM 邏輯鏈 CoT 推理)
+    │   ├── base_agent.py          # 代理人基底類別 (封裝 LLM API、重試、提示詞載入)
+    │   ├── budget_agent.py        # 預算配置代理人 (計算凱利公式、分配購買股數與預算)
+    │   ├── fundamental_agent.py   # 基本面估值代理人 (評估財報健康度、護城河與估值)
+    │   ├── macro_agent.py         # 總體經濟分析代理人 (分析宏觀走勢並產出大盤 regime 標籤)
+    │   ├── market_agent.py        # 板塊與技術分析代理人 (評估板塊強度與技術乖離指標)
+    │   ├── news_agent.py          # 輿情消息分析代理人 (新聞輿情過濾與情緒分析)
+    │   ├── reflection_agent.py    # 決策反思代理人 (回測歷史交易、產出增量反思修正指令)
+    │   └── writer_agent.py        # 總編輯合成代理人 (彙整各方意見，編撰最終 HTML/Markdown 週報)
+    ├── regime/             # 市場狀態偵測模組 (Regime Detection)
+    │   ├── detector.py            # 計算 Hurst 指數與 ADX-14 判定市場處於趨勢或均值回歸
+    │   └── registry.py            # 市場狀態持久化快取 (market_regime.json) 讀寫管理器
+    ├── risk/               # 波動與物理風控模組 (Risk Control)
+    │   ├── risk_manager.py        # 根據大盤 Regime 與 Beta-Adjusted ATR 計算個股操作邊界與停損停利點
+    │   └── trailing_stop.py       # 保本里程碑移動停損機制 (觸及 +1.0 ATR 自動將停損調為買入保本價)
+    ├── screener/           # 量化選股引擎模組 (Stock Screening)
+    │   ├── base.py                # 選股器基底類別 (定義成分股載入、Projected Volume 投影演算法)
+    │   ├── factory.py             # 策略選股工廠 (根據 Regime 路由至動量策略或均值回歸策略)
+    │   ├── momentum_strategy.py   # 動量趨勢選股策略 (動量因子、成交量增幅排行)
+    │   └── reversion_strategy.py  # 拉回均值回歸選股策略 (長線多頭、短線拉回超賣區)
+    ├── visualization/      # 績效視覺化渲染模組 (Performance Dashboard)
+    │   ├── dashboard_renderer.py  # 讀取 DB 資料與 NAV 歷史，使用 Jinja2 渲染 HTML 看板
+    │   └── templates/
+    │       └── dashboard_tpl.html # 看板之 Jinja2 HTML 樣式範本
+    ├── utils/              # 通用公用程式模組 (Shared Utilities)
+    │   ├── formatters.py          # CJK 中日韓字元寬度對齊格式化器
+    │   ├── parsers.py             # LLM 輸出清洗與 Regex 價格/區間提取器
+    │   └── research_pipeline.py   # 系統核心投研與分析管線 (包含週報、個股查詢等核心工作流)
+    ├── tools/              # 實體功能輔助工具 (Helper Tools)
+    │   ├── line_notifier.py       # LINE 訊息 API 發送器 (日報與崩潰報警)
+    │   ├── screener.py            # 歷史量化選股報告產生與持久化器
+    │   ├── taiwan_stock_names.py  # 台灣股票名稱與 Ticker 映射資料庫
+    │   ├── utils.py               # 通用工具函式 (如日誌 rotation 邏輯)
+    │   ├── valuation_engine.py    # 投行級量化估值引擎 (計算 DCF 及同行比較內在價值)
+    │   ├── web_search.py          # DuckDuckGo/GNews 聯網搜尋與爬取器
+    │   └── yahoo_finance.py       # Yahoo Finance 歷史與即時技術指標、成分股爬取器
+    ├── config.py           # 全域系統路徑與環境變數組態載入器
+    ├── db_manager.py       # 資料庫 Schema 初始化與 SQL 抽象介面 (MySQL / SQLite 雙模備援)
+    └── data/
+        ├── cache/          # API 快取與大盤狀態 JSON 本地快取 (12小時過期)
+        ├── db/             # 本地 SQLite 資料庫 (SQLite 備援存檔)
+        │   └── investments.db
+        ├── reports/        # 週報本機存檔目錄
+        └── sectors_config.json # 本地板塊與成分股備援組態設定檔
 ```
 
 ### ⚙️ 環境變數配置 (.env)
