@@ -95,5 +95,24 @@ class TestQuantScreenerFacade(unittest.TestCase):
         self.assertTrue(isinstance(constituents, list))
         self.assertTrue(len(constituents) > 0)
 
+class TestRiskManager(unittest.TestCase):
+    def test_risk_calculation_trend(self):
+        from core.risk.risk_manager import calculate_risk_boundaries
+        res = calculate_risk_boundaries(curr_price=100.0, atr_14=5.0, beta=1.0, market_regime="MOMENTUM_TREND")
+        # Standard: k1=2.0, k2=3.0. For price=100, ATR=5:
+        # SL = 100 - (2.0 * 5) = 90.0
+        # TP = 100 + (3.0 * 5) = 115.0
+        self.assertAlmostEqual(res["suggested_sl"], 90.0)
+        self.assertAlmostEqual(res["suggested_tp"], 115.0)
+
+    def test_risk_calculation_reversion(self):
+        from core.risk.risk_manager import calculate_risk_boundaries
+        res = calculate_risk_boundaries(curr_price=100.0, atr_14=5.0, beta=1.0, market_regime="MEAN_REVERSION_RANGE")
+        # Reversion: k1=1.2, k2=1.5. For price=100, ATR=5:
+        # SL = 100 - (1.2 * 5) = 94.0
+        # TP = 100 + (1.5 * 5) = 107.5
+        self.assertAlmostEqual(res["suggested_sl"], 94.0)
+        self.assertAlmostEqual(res["suggested_tp"], 107.5)
+
 if __name__ == "__main__":
     unittest.main()

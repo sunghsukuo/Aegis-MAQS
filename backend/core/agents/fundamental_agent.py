@@ -82,23 +82,45 @@ class FundamentalAgent(BaseAgent):
             return f"{prefix}{val}{suffix}"
 
         is_etf = financials.get("is_etf_proxy", False)
-        
-        # Calculate dynamic volatility stops based on Beta-adjusted ATR
         curr_price = financials.get("current_price", 0.0)
         atr_14 = financials.get("atr_14")
         beta = financials.get("beta", 1.0)
         
-        # Adjust stop/target/buying-range multipliers using square root of Beta for statistical scaling
-        beta_adj = math.sqrt(max(0.3, min(beta, 3.0)))
-        k1 = 2.0 * beta_adj
-        k2 = 3.0 * beta_adj
+        # Calculate dynamic volatility stops based on Beta-adjusted ATR via risk manager
+        from core.risk.risk_manager import calculate_risk_boundaries
+        risk_res = calculate_risk_boundaries(curr_price, atr_14, beta, market_regime=market_regime)
         
-        suggested_sl = curr_price - (k1 * atr_14) if (atr_14 and curr_price) else curr_price * 0.92
-        suggested_tp = curr_price + (k2 * atr_14) if (atr_14 and curr_price) else curr_price * 1.15
-        
-        # Volatility-based buying range: Lower = Price - 1.0*Beta_adj*ATR, Upper = Price + 0.25*Beta_adj*ATR
-        suggested_buy_lower = curr_price - (1.0 * beta_adj * atr_14) if (atr_14 and curr_price) else curr_price * 0.97
-        suggested_buy_upper = curr_price + (0.25 * beta_adj * atr_14) if (atr_14 and curr_price) else curr_price * 1.02
+        k1 = risk_res["k1"]
+        k2 = risk_res["k2"]
+        suggested_sl = risk_res["suggested_sl"]
+        suggested_tp = risk_res["suggested_tp"]
+        suggested_buy_lower = risk_res["suggested_buy_lower"]
+        suggested_buy_upper = risk_res["suggested_buy_upper"]
+        beta_adj = risk_res["beta_adj"]
+
+        # In addition to standard macro regimes, check if we need to load the anti-chasing prompt snippet
+        regime_upper = (market_regime or "").upper()
+        if "REVERSION" in regime_upper or "RANGEBOUND" in regime_upper or market_regime == "VOLATILE_RANGEBOUND":
+            rsi_val = financials.get("rsi_14")
+            sma_50 = financials.get("fifty_day_sma")
+            bias_str = ""
+            if rsi_val is not None or sma_50 is not None:
+                bias_str = "\n【目前標的之短線超買指標偏離度】:\n"
+                if rsi_val is not None:
+                    bias_str += f"- RSI-14: {rsi_val:.1f}\n"
+                if sma_50 is not None and curr_price:
+                    bias = (curr_price - sma_50) / sma_50 * 100
+                    bias_str += f"- 50日均線正偏離度 (Bias): {bias:+.2f}%\n"
+            
+            anti_chasing = f"""
+【重要指令變更 - 均值回歸防追高硬性限制】:{bias_str}
+⚠️ 目前市場處於【均值回歸/震盪市】氣候。在該氣候下，追逐高位突破股極易遭受動能崩潰 (Momentum Crash)。
+請嚴格遵循防追高紀律：
+1. 若此標的目前 RSI > 70 或 50日均線正偏離度 > 15%，代表股價短線已嚴重超買或乖離過大。除非有極端強烈之基本面實質支撐，否則你必須一律強制將評級調降至 Hold 或 Sell，以觸發預算閹割風控！
+2. 即使基本面良好，亦必須在「估值與安全邊際評估」中特別強調高位追價的回撤風險，並調低建議持倉權重。
+"""
+            regime_instruction += anti_chasing
+
 
 
         if is_etf:
