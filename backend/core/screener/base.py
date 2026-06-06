@@ -229,7 +229,7 @@ class BaseScreener:
                     lines.append(f"| **5日動能回報** | {weekly_return:+.2f}% | 反映過去 5 個交易日之強勢資金推升力道。 |")
                     lines.append(f"| **資產管理規模 (AUM)** | {f_val('total_assets', divisor=10**9, suffix=' B')} | 代表此 ETF 之市場流動性與防禦深度。 |")
                     lines.append(f"| **配息率 / 收益率** | {f_val('dividend_yield', suffix='%', divisor=0.01)} | 提供穩健持股之防守現金流回報。 |")
-                    lines.append(f"| **淨值價 (NAV)** | {price_symbol}{f_val('nav_price')} | ETF 本身代表的實際底層裝產價值。 |")
+                    lines.append(f"| **淨值價 (NAV)** | {price_symbol}{f_val('nav_price')} | ETF 本身代表的實際淨資產價值。 |")
                     lines.append(f"| **14天強弱指標 (RSI)** | {f_val('rsi_14', fmt='.1f')} | 判定目前動能位階（低於 30 為超賣，高於 70 為超買）。 |")
                     lines.append(f"| **20日均線 (20MA)** | {price_symbol}{f_val('sma_20')} | 短期生命線（現價高於 20MA 代表短線多頭確立）。 |")
                     lines.append(f"| **50日均線 (50MA)** | {price_symbol}{f_val('fifty_day_sma')} | 中期季線位階（確認中線波段防禦支撐點）。 |")
