@@ -126,12 +126,13 @@ def research_and_track_asset(
                 except ValueError:
                     pass
                     
-    if suggested_weight is None or suggested_weight <= 0.0:
+    if suggested_weight is None:
         if rating == "Strong Buy": suggested_weight = 0.25
         elif rating == "Buy": suggested_weight = 0.15
         elif rating == "Hold": suggested_weight = 0.05
         elif rating == "Sell": suggested_weight = 0.0
         else: suggested_weight = 0.0
+
         
     invested_amount = 0.0
     shares = 0.0
