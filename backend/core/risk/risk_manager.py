@@ -53,32 +53,44 @@ def calculate_risk_boundaries(curr_price: float, atr_14: float, beta: float, mar
     }
 
 
-def get_dynamic_mdd_limit(market_regime: str = None) -> float:
+def get_dynamic_mdd_limit(market_regime: str = None, currency: str = 'TWD') -> float:
     """
-    Returns the dynamic maximum drawdown (MDD) warning limit based on the market regime.
-    Applies multipliers from core.config to DEFAULT_MDD_LIMIT to adjust limits up/down dynamically.
+    Returns the dynamic maximum drawdown (MDD) warning limit based on the market regime and region.
+    Applies multipliers from core.config to DEFAULT_TWD_MDD_LIMIT or DEFAULT_USD_MDD_LIMIT
+    to adjust limits up/down dynamically.
     """
     from core.config import (
+        DEFAULT_TWD_MDD_LIMIT,
+        DEFAULT_USD_MDD_LIMIT,
         DEFAULT_MDD_LIMIT,
         BULL_MDD_MULTIPLIER,
         BEAR_MDD_MULTIPLIER,
         RANGEBOUND_MDD_MULTIPLIER
     )
     
+    curr = (currency or 'TWD').upper()
+    if curr == 'USD':
+        base_limit = DEFAULT_USD_MDD_LIMIT
+    elif curr == 'TWD':
+        base_limit = DEFAULT_TWD_MDD_LIMIT
+    else:
+        base_limit = DEFAULT_MDD_LIMIT
+        
     if not market_regime:
-        return DEFAULT_MDD_LIMIT
+        return base_limit
         
     regime = market_regime.upper()
-    limit = DEFAULT_MDD_LIMIT
+    limit = base_limit
     
     if "BULL" in regime or "RISK_ON" in regime:
-        limit = DEFAULT_MDD_LIMIT * BULL_MDD_MULTIPLIER
+        limit = base_limit * BULL_MDD_MULTIPLIER
     elif "BEAR" in regime or "RISK_OFF" in regime:
-        limit = DEFAULT_MDD_LIMIT * BEAR_MDD_MULTIPLIER
+        limit = base_limit * BEAR_MDD_MULTIPLIER
     elif "REVERSION" in regime or "RANGEBOUND" in regime or "VOLATILE" in regime:
-        limit = DEFAULT_MDD_LIMIT * RANGEBOUND_MDD_MULTIPLIER
+        limit = base_limit * RANGEBOUND_MDD_MULTIPLIER
         
     # Apply a sanity lower bound of 0.5% (0.005) and upper bound of 20% (0.20)
     return max(0.005, min(limit, 0.20))
+
 
 

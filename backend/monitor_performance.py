@@ -319,8 +319,9 @@ def main():
         twd_regime_name = twd_regime_info.get("regime", "MOMENTUM_TREND")
         usd_regime_name = usd_regime_info.get("regime", "MOMENTUM_TREND")
         
-        twd_mdd_limit = get_dynamic_mdd_limit(twd_regime_name)
-        usd_mdd_limit = get_dynamic_mdd_limit(usd_regime_name)
+        twd_mdd_limit = get_dynamic_mdd_limit(twd_regime_name, "TWD")
+        usd_mdd_limit = get_dynamic_mdd_limit(usd_regime_name, "USD")
+
         
         twd_triggered = (twd_mdd > twd_mdd_limit) or (twd_drop > twd_mdd_limit)
         usd_triggered = (usd_mdd > usd_mdd_limit) or (usd_drop > usd_mdd_limit)

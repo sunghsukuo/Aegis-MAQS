@@ -285,7 +285,8 @@ def run_portfolio_check(report_date: str, regions: list = None):
                 
                 regime_info = get_market_regime(region_filter)
                 regime_name = regime_info.get("regime", "MOMENTUM_TREND")
-                mdd_limit = get_dynamic_mdd_limit(regime_name)
+                mdd_limit = get_dynamic_mdd_limit(regime_name, curr)
+
                 
                 triggered = (current_mdd > mdd_limit) or (current_drop > mdd_limit)
                 
