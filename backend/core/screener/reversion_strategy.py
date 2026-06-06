@@ -24,7 +24,7 @@ class ReversionScreener(BaseScreener):
             try:
                 t = yf.Ticker(ticker)
                 # Pull 1 year history to get 200-day moving average and 14-day RSI
-                hist = t.history(period="1y")
+                hist = t.history(period="1y").dropna(subset=["Close"])
                 if hist.empty or len(hist) < 200:
                     continue
                 
@@ -132,7 +132,7 @@ class ReversionScreener(BaseScreener):
         # ETF own return calculation
         etf_weekly_return = 0.0
         try:
-            etf_hist = yf.Ticker(etf_ticker).history(period="1mo")
+            etf_hist = yf.Ticker(etf_ticker).history(period="1mo").dropna(subset=["Close"])
             if not etf_hist.empty and len(etf_hist) >= 6:
                 etf_close_now = etf_hist["Close"].iloc[-1]
                 etf_close_5d_ago = etf_hist["Close"].iloc[-6]

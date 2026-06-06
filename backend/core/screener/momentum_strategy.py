@@ -21,7 +21,7 @@ class MomentumScreener(BaseScreener):
         for ticker in tickers:
             try:
                 t = yf.Ticker(ticker)
-                hist = t.history(period="1mo")
+                hist = t.history(period="1mo").dropna(subset=["Close"])
                 if hist.empty or len(hist) < 20:
                     continue
                 
@@ -106,7 +106,7 @@ class MomentumScreener(BaseScreener):
         # ETF own return calculation
         etf_weekly_return = 0.0
         try:
-            etf_hist = yf.Ticker(etf_ticker).history(period="1mo")
+            etf_hist = yf.Ticker(etf_ticker).history(period="1mo").dropna(subset=["Close"])
             if not etf_hist.empty and len(etf_hist) >= 6:
                 etf_close_now = etf_hist["Close"].iloc[-1]
                 etf_close_5d_ago = etf_hist["Close"].iloc[-6]

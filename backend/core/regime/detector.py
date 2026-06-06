@@ -74,7 +74,7 @@ def detect_market_regime(region_code: str) -> dict:
     try:
         t = yf.Ticker(benchmark_ticker)
         # Fetch 60 trading days (approx 3 months)
-        hist = t.history(period="60d")
+        hist = t.history(period="60d").dropna(subset=["Close"])
         if hist.empty or len(hist) < 30:
             return {"regime": "MOMENTUM_TREND", "adx": 20.0, "hurst": 0.50}
             

@@ -15,7 +15,7 @@ def _get_stock_price_raw(ticker: str) -> float:
     if price is not None:
         return float(price)
     # Fallback to history
-    hist = t.history(period="1d")
+    hist = t.history(period="1d").dropna(subset=["Close"])
     if not hist.empty:
         return float(hist["Close"].iloc[-1])
     raise ValueError(f"No price data available for {ticker}")
@@ -37,7 +37,7 @@ def _get_benchmark_performance_raw(region_code: str) -> dict:
         
     benchmark_ticker = region_info["benchmark"]
     t = yf.Ticker(benchmark_ticker)
-    hist = t.history(period="3mo")
+    hist = t.history(period="3mo").dropna(subset=["Close"])
     if hist.empty or len(hist) < 22:
         raise ValueError(f"Insufficient historical data for benchmark {benchmark_ticker}")
         
@@ -77,7 +77,7 @@ def get_benchmark_performance(region_code: str) -> dict:
 def _get_single_etf_performance(etf_ticker: str, label_name: str) -> dict:
     """Fetches single ETF weekly performance with robust retries."""
     t = yf.Ticker(etf_ticker)
-    hist = t.history(period="10d")  # Pull slightly more to ensure enough days
+    hist = t.history(period="10d").dropna(subset=["Close"])  # Pull slightly more to ensure enough days
     if hist.empty or len(hist) < 6:
         raise ValueError(f"No sufficient history data for ETF {etf_ticker}")
         
@@ -156,7 +156,7 @@ def _calculate_technical_metrics_raw(ticker: str) -> dict:
     """Internal technical indicator calculator with retries."""
     t = yf.Ticker(ticker)
     # Pull 60 days history to ensure enough data for 14-day RSI, 20-day SMA, 14-day ATR, and Beta
-    hist = t.history(period="60d")
+    hist = t.history(period="60d").dropna(subset=["Close"])
     if hist.empty or len(hist) < 20:
         raise ValueError(f"Insufficient technical history for {ticker}")
         
@@ -201,7 +201,7 @@ def _calculate_technical_metrics_raw(ticker: str) -> dict:
         benchmark_ticker = "^TWII" if region == "Taiwan" else "^GSPC"
         
         # Nested network request also protected with a single try block
-        bench_hist = yf.Ticker(benchmark_ticker).history(period="60d")
+        bench_hist = yf.Ticker(benchmark_ticker).history(period="60d").dropna(subset=["Close"])
         if not bench_hist.empty and len(hist) >= 20:
             stock_returns = close.pct_change().dropna()
             bench_returns = bench_hist["Close"].pct_change().dropna()
@@ -236,7 +236,7 @@ def _get_stock_financials_raw(ticker: str) -> dict:
     current_price = fast_info.get("lastPrice") or info.get("currentPrice") or info.get("regularMarketPrice")
     if not current_price:
         # Fallback to daily history
-        hist = t.history(period="1d")
+        hist = t.history(period="1d").dropna(subset=["Close"])
         if not hist.empty:
             current_price = hist["Close"].iloc[-1]
             
@@ -368,7 +368,7 @@ def _calculate_roi_since_raw(ticker: str, purchase_date_str: str) -> dict:
     # Pull up to current date (end date is exclusive in yfinance, so add 3 days buffer)
     end_date = datetime.now() + timedelta(days=3)
     
-    hist = t.history(start=start_date.strftime("%Y-%m-%d"), end=end_date.strftime("%Y-%m-%d"))
+    hist = t.history(start=start_date.strftime("%Y-%m-%d"), end=end_date.strftime("%Y-%m-%d")).dropna(subset=["Close"])
     if hist.empty:
         raise ValueError(f"No history data since {purchase_date_str} for {ticker}")
         
