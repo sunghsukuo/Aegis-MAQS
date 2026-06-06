@@ -107,9 +107,10 @@ DEFAULT_TWD_MDD_LIMIT = float(os.getenv("DEFAULT_TWD_MDD_LIMIT", "0.03"))       
 DEFAULT_USD_MDD_LIMIT = float(os.getenv("DEFAULT_USD_MDD_LIMIT", "0.06"))        # US stock MDD default limit (6%) due to no price limits
 
 # Regime-based MDD Warning Limit Multipliers (applied to DEFAULT_MDD_LIMIT)
-BULL_MDD_MULTIPLIER = float(os.getenv("BULL_MDD_MULTIPLIER", "1.67"))            # e.g. 0.03 * 1.67 = ~0.05
-BEAR_MDD_MULTIPLIER = float(os.getenv("BEAR_MDD_MULTIPLIER", "0.50"))            # e.g. 0.03 * 0.50 = 0.015
+BULL_MDD_MULTIPLIER = float(os.getenv("BULL_MDD_MULTIPLIER", "1.50"))            # e.g. 0.03 * 1.50 = 0.045
+BEAR_MDD_MULTIPLIER = float(os.getenv("BEAR_MDD_MULTIPLIER", "0.70"))            # e.g. 0.03 * 0.70 = 0.021
 RANGEBOUND_MDD_MULTIPLIER = float(os.getenv("RANGEBOUND_MDD_MULTIPLIER", "1.00")) # e.g. 0.03 * 1.00 = 0.03
+
 
 
 

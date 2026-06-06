@@ -115,7 +115,7 @@ class TestRiskManager(unittest.TestCase):
         self.assertAlmostEqual(res["suggested_tp"], 107.5)
 
     def test_dynamic_mdd_limit(self):
-        from core.risk.risk_manager import get_dynamic_mdd_limit
+        from core.risk.risk_manager import get_dynamic_mdd_limit, calculate_portfolio_beta
         from core.config import (
             DEFAULT_TWD_MDD_LIMIT,
             DEFAULT_USD_MDD_LIMIT,
@@ -124,27 +124,34 @@ class TestRiskManager(unittest.TestCase):
             RANGEBOUND_MDD_MULTIPLIER
         )
         
+        # Calculate active portfolio beta multipliers for testing environment compatibility
+        beta_twd = max(0.5, min(calculate_portfolio_beta("TWD"), 2.0))
+        beta_usd = max(0.5, min(calculate_portfolio_beta("USD"), 2.0))
+        
         # Test Default fallback (TWD default)
-        self.assertAlmostEqual(get_dynamic_mdd_limit(None, "TWD"), DEFAULT_TWD_MDD_LIMIT)
-        self.assertAlmostEqual(get_dynamic_mdd_limit("UNKNOWN_REGIME", "TWD"), DEFAULT_TWD_MDD_LIMIT)
+        expected_twd_fallback = max(0.005, min(DEFAULT_TWD_MDD_LIMIT * beta_twd, 0.20))
+        self.assertAlmostEqual(get_dynamic_mdd_limit(None, "TWD"), expected_twd_fallback)
+        self.assertAlmostEqual(get_dynamic_mdd_limit("UNKNOWN_REGIME", "TWD"), expected_twd_fallback)
         
         # Test USD fallback
-        self.assertAlmostEqual(get_dynamic_mdd_limit(None, "USD"), DEFAULT_USD_MDD_LIMIT)
-        self.assertAlmostEqual(get_dynamic_mdd_limit("UNKNOWN_REGIME", "USD"), DEFAULT_USD_MDD_LIMIT)
+        expected_usd_fallback = max(0.005, min(DEFAULT_USD_MDD_LIMIT * beta_usd, 0.20))
+        self.assertAlmostEqual(get_dynamic_mdd_limit(None, "USD"), expected_usd_fallback)
+        self.assertAlmostEqual(get_dynamic_mdd_limit("UNKNOWN_REGIME", "USD"), expected_usd_fallback)
         
         # Test TWD Bull Market Regime
-        expected_twd_bull = max(0.005, min(DEFAULT_TWD_MDD_LIMIT * BULL_MDD_MULTIPLIER, 0.20))
+        expected_twd_bull = max(0.005, min(DEFAULT_TWD_MDD_LIMIT * beta_twd * BULL_MDD_MULTIPLIER, 0.20))
         self.assertAlmostEqual(get_dynamic_mdd_limit("BULL_MARKET", "TWD"), expected_twd_bull)
         self.assertAlmostEqual(get_dynamic_mdd_limit("RISK_ON", "TWD"), expected_twd_bull)
         
         # Test USD Bear Market Regime
-        expected_usd_bear = max(0.005, min(DEFAULT_USD_MDD_LIMIT * BEAR_MDD_MULTIPLIER, 0.20))
+        expected_usd_bear = max(0.005, min(DEFAULT_USD_MDD_LIMIT * beta_usd * BEAR_MDD_MULTIPLIER, 0.20))
         self.assertAlmostEqual(get_dynamic_mdd_limit("BEAR_MARKET", "USD"), expected_usd_bear)
         self.assertAlmostEqual(get_dynamic_mdd_limit("RISK_OFF", "USD"), expected_usd_bear)
         
         # Test Rangebound/Reversion Regime (TWD)
-        expected_twd_range = max(0.005, min(DEFAULT_TWD_MDD_LIMIT * RANGEBOUND_MDD_MULTIPLIER, 0.20))
+        expected_twd_range = max(0.005, min(DEFAULT_TWD_MDD_LIMIT * beta_twd * RANGEBOUND_MDD_MULTIPLIER, 0.20))
         self.assertAlmostEqual(get_dynamic_mdd_limit("RANGEBOUND", "TWD"), expected_twd_range)
+
 
 
 
