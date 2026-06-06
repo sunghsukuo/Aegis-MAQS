@@ -46,7 +46,11 @@ def main():
     # 1. Gather stats from Database
     reports = db.list_all_reports()
     active_recs = db.get_active_recommendations()
+    # Filter out recommendations that have no actual holdings (shares == 0)
+    active_recs = [r for r in active_recs if r.get("shares", 0.0) > 0.0]
+    
     perf_data = db.get_historical_performance()
+
     closed_recs = perf_data.get("closed", [])
     
     # 2. Gather budget and capital states from BudgetAgent

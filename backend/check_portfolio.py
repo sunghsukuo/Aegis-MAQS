@@ -113,7 +113,11 @@ def run_portfolio_check(report_date: str, regions: list = None):
         else:
             active_recs = db.get_active_recommendations()
             
+        # Filter out recommendations that have no actual holdings (shares == 0)
+        active_recs = [r for r in active_recs if r.get("shares", 0.0) > 0.0]
+            
         if not active_recs:
+
             print_info("目前指定區域無在庫追蹤個股 (Active Portfolio is empty)。")
             print_success("==================================================")
             return  # Changed from sys.exit(0) to prevent terminating parent report generator!
