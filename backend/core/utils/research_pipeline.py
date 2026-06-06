@@ -111,12 +111,13 @@ def research_and_track_asset(
             line_upper = line.upper()
             if "STRONG BUY" in line_upper or "強烈買入" in line_upper:
                 rating = "Strong Buy"
-            elif "BUY" in line_upper or "買入" in line_upper:
-                rating = "Buy"
+            elif "SELL" in line_upper or "賣出" in line_upper or "避開" in line_upper or "避免" in line_upper or "不建議買入" in line_upper:
+                rating = "Sell"
             elif "HOLD" in line_upper or "持有" in line_upper or "NEUTRAL" in line_upper or "觀望" in line_upper:
                 rating = "Hold"
-            elif "SELL" in line_upper or "賣出" in line_upper or "避開" in line_upper:
-                rating = "Sell"
+            elif "BUY" in line_upper or "買入" in line_upper:
+                rating = "Buy"
+
         elif "建議持倉權重" in line or "持倉權重" in line or "建議權重" in line:
             weight_match = re.search(r"(\d+(?:\.\d+)?)\s*%", line)
             if weight_match:
