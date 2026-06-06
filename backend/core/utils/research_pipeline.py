@@ -490,6 +490,20 @@ def run_report_pipeline(args, report_date, regions_list, timestamp_suffix, daily
             mac_rep, mkt_rep, stk_rep, regime = run_regional_analysis(r_code, report_date, reflection_directives)
             regional_regimes[region_name] = regime
             
+            # [Regime Registry Integration] Save detected market regime to cache
+            try:
+                from core.regime.registry import save_market_regime
+                save_market_regime(r_code, {
+                    "regime": regime,
+                    "adx": 20.0,
+                    "hurst": 0.50,
+                    "ticker": "^GSPC" if r_code == "US" else "^TWII"
+                })
+                print_info(f"[{r_code}] 成功將總經市場情境標籤 {regime} 寫入快取。")
+            except Exception as reg_ex:
+                print_error(f"[{r_code}] 無法將市場情境寫入快取: {reg_ex}")
+
+            
             # Step 3: Run Writer Agent (Chief Editor) to synthesize THIS region's report independently!
             print_info(f"✍ 正在調度總編輯代理人 (WriterAgent) 進行【{region_name}】專用策略週報撰寫...")
             writer_agent = WriterAgent()

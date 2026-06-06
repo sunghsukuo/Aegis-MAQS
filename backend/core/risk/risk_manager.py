@@ -53,11 +53,65 @@ def calculate_risk_boundaries(curr_price: float, atr_14: float, beta: float, mar
     }
 
 
+def calculate_portfolio_beta(currency: str = 'TWD') -> float:
+    """
+    Calculates the weighted Beta of the active portfolio for a given currency/region.
+    Falls back to 1.0 if there are no holdings or errors occur.
+    """
+    try:
+        import json
+        from pathlib import Path
+        import core.db_manager as db
+        from core.config import BACKEND_ROOT
+        
+        region_filter = "US" if currency.upper() == "USD" else "Taiwan"
+        active_recs = db.get_active_recommendations(region=region_filter)
+        active_recs = [r for r in active_recs if r.get('shares', 0.0) > 0.0]
+        
+        if not active_recs:
+            return 1.0
+            
+        import core.tools.yahoo_finance as yf_tool
+
+        
+        total_val = 0.0
+        weighted_beta_sum = 0.0
+        
+        for r in active_recs:
+            shares = r.get("shares", 0.0)
+            ticker = r.get("ticker")
+            curr_price = yf_tool.get_stock_price(ticker)
+            if curr_price <= 0.0:
+                curr_price = r.get("recommend_price", 0.0)
+                
+            pos_val = shares * curr_price
+            if pos_val > 0.0:
+                total_val += pos_val
+                
+                # Load stock beta from cache
+                stock_beta = 1.0
+                cache_file = BACKEND_ROOT / "core" / "data" / "cache" / f"financials_{ticker}.json"
+                if cache_file.exists():
+                    try:
+                        with open(cache_file, "r", encoding="utf-8") as f:
+                            cache_data = json.load(f)
+                            stock_beta = cache_data.get("beta", 1.0) or 1.0
+                    except Exception:
+                        pass
+                weighted_beta_sum += pos_val * stock_beta
+                
+        if total_val > 0.0:
+            return weighted_beta_sum / total_val
+    except Exception:
+        pass
+    return 1.0
+
+
 def get_dynamic_mdd_limit(market_regime: str = None, currency: str = 'TWD') -> float:
     """
     Returns the dynamic maximum drawdown (MDD) warning limit based on the market regime and region.
-    Applies multipliers from core.config to DEFAULT_TWD_MDD_LIMIT or DEFAULT_USD_MDD_LIMIT
-    to adjust limits up/down dynamically.
+    Applies multipliers from core.config to DEFAULT_TWD_MDD_LIMIT or DEFAULT_USD_MDD_LIMIT,
+    and scales it dynamically based on the weighted Portfolio Beta.
     """
     from core.config import (
         DEFAULT_TWD_MDD_LIMIT,
@@ -76,21 +130,29 @@ def get_dynamic_mdd_limit(market_regime: str = None, currency: str = 'TWD') -> f
     else:
         base_limit = DEFAULT_MDD_LIMIT
         
+    # Calculate portfolio beta dynamically
+    portfolio_beta = calculate_portfolio_beta(curr)
+    
+    # Scale base limit by portfolio beta (bounded between 0.5 and 2.0 to avoid extreme values)
+    beta_adj = max(0.5, min(portfolio_beta, 2.0))
+    adjusted_base = base_limit * beta_adj
+    
     if not market_regime:
-        return base_limit
+        return max(0.005, min(adjusted_base, 0.20))
         
     regime = market_regime.upper()
-    limit = base_limit
+    limit = adjusted_base
     
     if "BULL" in regime or "RISK_ON" in regime:
-        limit = base_limit * BULL_MDD_MULTIPLIER
+        limit = adjusted_base * BULL_MDD_MULTIPLIER
     elif "BEAR" in regime or "RISK_OFF" in regime:
-        limit = base_limit * BEAR_MDD_MULTIPLIER
+        limit = adjusted_base * BEAR_MDD_MULTIPLIER
     elif "REVERSION" in regime or "RANGEBOUND" in regime or "VOLATILE" in regime:
-        limit = base_limit * RANGEBOUND_MDD_MULTIPLIER
+        limit = adjusted_base * RANGEBOUND_MDD_MULTIPLIER
         
     # Apply a sanity lower bound of 0.5% (0.005) and upper bound of 20% (0.20)
     return max(0.005, min(limit, 0.20))
+
 
 
 
