@@ -298,6 +298,8 @@ def main():
     import argparse
     parser = argparse.ArgumentParser(description="投資持股實時對帳與風控監測系統 (0-Token Check)")
     parser.add_argument("--regions", nargs="+", default=[], help="指定對帳區域，例如 US Taiwan (不指定則預設全域對帳)")
+    parser.add_argument("--daemon", action="store_true", help="以守護進程模式執行，定時在交易時段輪詢對帳")
+    parser.add_argument("--interval", type=int, default=300, help="以守護進程執行時的輪詢間隔 (秒，預設 300 秒/5分鐘)")
     args = parser.parse_args()
     
     # Auto-rotate logs defensively on startup to prevent disk space exhaustion
@@ -309,7 +311,30 @@ def main():
         print(f"[!] Log Rotator Failure: {le}")
         
     report_date = datetime.now().strftime("%Y-%m-%d")
-    run_portfolio_check(report_date, regions=args.regions)
+    
+    if args.daemon:
+        import time
+        import subprocess
+        print_success(f"[🛡️ 風控守護進程] 啟動背景監控 Daemon 模式。輪詢間隔為 {args.interval} 秒。")
+        while True:
+            try:
+                curr_date = datetime.now().strftime("%Y-%m-%d")
+                run_portfolio_check(curr_date, regions=args.regions)
+                
+                # 同步呼叫效能監控與風控看門狗，計算動態 MDD 與同步資料庫熔斷狀態 (3.0% 機制)
+                try:
+                    backend_dir = Path(__file__).resolve().parent
+                    # 呼叫 monitor_performance.py --silent --send-line 執行動態回撤判定與熔斷更新
+                    subprocess.run([sys.executable, str(backend_dir / "monitor_performance.py"), "--silent", "--send-line"], capture_output=True)
+                except Exception as mon_ex:
+                    print_error(f"[!] 風控看板即時監測呼叫失敗: {mon_ex}")
+            except Exception as loop_ex:
+                print_error(f"[!] Daemon 循環內對帳出錯: {loop_ex}")
+            
+            time.sleep(args.interval)
+    else:
+        run_portfolio_check(report_date, regions=args.regions)
+
 
 if __name__ == "__main__":
     main()

@@ -53,6 +53,12 @@ class BudgetAgent:
         state = self.get_capital_state(currency)
         available = state["available_capital"]
         
+        # Check if the risk circuit breaker is active for this currency (Circuit Breaker block)
+        from core.db_manager import get_risk_circuit_breaker
+        if get_risk_circuit_breaker(currency):
+            print(f"[🛑 熔斷機制] 偵測到 {currency} 帳戶已啟動風控熔斷！全面凍結新標的 {ticker} 的買入預算配發。")
+            return 0.0, 0.0
+            
         # 安全下限閥值：若可用資金過低，則不予分配新交易
         min_threshold = 100.0 if currency == "USD" else 3000.0
         if available < min_threshold:

@@ -309,8 +309,29 @@ def main():
         twd_mdd = twd_metrics.get("mdd", 0.0)
         usd_mdd = usd_metrics.get("mdd", 0.0)
 
-        # 3. Determine if watchdog alert is triggered (MDD > 3% or drop from peak > 3%)
-        trigger_warning = (twd_mdd > 0.03) or (usd_mdd > 0.03) or (twd_drop > 0.03) or (usd_drop > 0.03)
+        # 3. Determine if watchdog alert is triggered (MDD > dynamic warning limit or drop from peak > dynamic warning limit)
+        from core.regime.registry import get_market_regime
+        from core.risk.risk_manager import get_dynamic_mdd_limit
+        
+        twd_regime_info = get_market_regime("Taiwan")
+        usd_regime_info = get_market_regime("US")
+        
+        twd_regime_name = twd_regime_info.get("regime", "MOMENTUM_TREND")
+        usd_regime_name = usd_regime_info.get("regime", "MOMENTUM_TREND")
+        
+        twd_mdd_limit = get_dynamic_mdd_limit(twd_regime_name)
+        usd_mdd_limit = get_dynamic_mdd_limit(usd_regime_name)
+        
+        twd_triggered = (twd_mdd > twd_mdd_limit) or (twd_drop > twd_mdd_limit)
+        usd_triggered = (usd_mdd > usd_mdd_limit) or (usd_drop > usd_mdd_limit)
+        trigger_warning = twd_triggered or usd_triggered
+
+        # Sync Circuit Breaker states in the database
+        try:
+            db.update_risk_circuit_breaker("TWD", 1 if twd_triggered else 0)
+            db.update_risk_circuit_breaker("USD", 1 if usd_triggered else 0)
+        except Exception as cb_ex:
+            sys.stderr.write(f"[!] 無法更新風控熔斷狀態到資料庫: {cb_ex}\n")
 
         # 4. Construct beautiful message card
         if trigger_warning:
@@ -320,17 +341,17 @@ def main():
                 f"================================\n"
                 f"觀測進度：第 {elapsed_days} / 30 天\n"
                 f"發送時間：{datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n"
-                f"⚠️ 系統已偵測到風控指標突破預設警戒線 (3.0%)！\n"
+                f"⚠️ 系統已偵測到風控指標突破動態警戒線！\n"
             )
             triggers = []
-            if twd_mdd > 0.03:
-                triggers.append(f"• 台股歷史最大回撤 (MDD) 達 {twd_mdd*100:.2f}%")
-            if twd_drop > 0.03:
-                triggers.append(f"• 台股資產自峰值回降 達 {twd_drop*100:.2f}%")
-            if usd_mdd > 0.03:
-                triggers.append(f"• 美股歷史最大回撤 (MDD) 達 {usd_mdd*100:.2f}%")
-            if usd_drop > 0.03:
-                triggers.append(f"• 美股資產自峰值回降 達 {usd_drop*100:.2f}%")
+            if twd_mdd > twd_mdd_limit:
+                triggers.append(f"• 台股歷史最大回撤 (MDD) 達 {twd_mdd*100:.2f}% (動態警戒: {twd_mdd_limit*100:.1f}%)")
+            if twd_drop > twd_mdd_limit:
+                triggers.append(f"• 台股資產自峰值回降 達 {twd_drop*100:.2f}% (動態警戒: {twd_mdd_limit*100:.1f}%)")
+            if usd_mdd > usd_mdd_limit:
+                triggers.append(f"• 美股歷史最大回撤 (MDD) 達 {usd_mdd*100:.2f}% (動態警戒: {usd_mdd_limit*100:.1f}%)")
+            if usd_drop > usd_mdd_limit:
+                triggers.append(f"• 美股資產自峰值回降 達 {usd_drop*100:.2f}% (動態警戒: {usd_mdd_limit*100:.1f}%)")
             message += "\n".join(triggers) + "\n\n"
 
             message += (

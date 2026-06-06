@@ -101,3 +101,8 @@ MAX_SECTORS_PER_REGION = 2  # Default to scan top 2 performing sectors
 MAX_STOCKS_PER_REGION = 4   # Default to deep-dive top 4 representative stocks per region
 
 
+# Dynamic Wind-Down / Drawdown Watchdog Settings
+DEFAULT_MDD_LIMIT = float(os.getenv("DEFAULT_MDD_LIMIT", "0.03"))
+
+
+

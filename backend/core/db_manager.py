@@ -169,6 +169,7 @@ def init_db():
                     currency VARCHAR(10) UNIQUE NOT NULL, -- 'USD' or 'TWD'
                     available_capital DOUBLE NOT NULL,
                     reserved_cash DOUBLE NOT NULL,
+                    risk_circuit_breaker TINYINT DEFAULT 0,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
             """)
@@ -179,6 +180,7 @@ def init_db():
                     currency TEXT UNIQUE NOT NULL,
                     available_capital REAL NOT NULL,
                     reserved_cash REAL NOT NULL,
+                    risk_circuit_breaker INTEGER DEFAULT 0,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
@@ -226,6 +228,11 @@ def init_db():
                 cursor.execute("ALTER TABLE recommendations ADD COLUMN shares DOUBLE DEFAULT 0.0;")
                 cursor.execute("ALTER TABLE recommendations ADD COLUMN pnl DOUBLE DEFAULT 0.0;")
                 print("[✓] MySQL recommendations table upgraded with capital tracking columns.")
+            
+            cursor.execute("SHOW COLUMNS FROM capital_ledger LIKE 'risk_circuit_breaker'")
+            if not cursor.fetchone():
+                cursor.execute("ALTER TABLE capital_ledger ADD COLUMN risk_circuit_breaker TINYINT DEFAULT 0;")
+                print("[✓] MySQL capital_ledger table upgraded with risk_circuit_breaker column.")
         else:
             cursor.execute("PRAGMA table_info(recommendations)")
             cols = [row[1] for row in cursor.fetchall()]
@@ -234,6 +241,12 @@ def init_db():
                 cursor.execute("ALTER TABLE recommendations ADD COLUMN shares REAL DEFAULT 0.0;")
                 cursor.execute("ALTER TABLE recommendations ADD COLUMN pnl REAL DEFAULT 0.0;")
                 print("[✓] SQLite recommendations table upgraded with capital tracking columns.")
+            
+            cursor.execute("PRAGMA table_info(capital_ledger)")
+            ledger_cols = [row[1] for row in cursor.fetchall()]
+            if "risk_circuit_breaker" not in ledger_cols:
+                cursor.execute("ALTER TABLE capital_ledger ADD COLUMN risk_circuit_breaker INTEGER DEFAULT 0;")
+                print("[✓] SQLite capital_ledger table upgraded with risk_circuit_breaker column.")
 
         # 5. Portfolio NAV History Table DDL
         if DB_TYPE == "mysql":
@@ -838,3 +851,34 @@ def get_recent_inference_logs_with_roi(agent_name: str, limit: int = 6) -> list:
                     "prompt_version": r[4]
                 })
         return results
+
+
+def get_risk_circuit_breaker(currency: str) -> bool:
+    """
+    Checks if the risk circuit breaker is triggered (1) for a specific currency pocket (USD/TWD).
+    Returns True if triggered, False otherwise.
+    """
+    with db_session() as conn:
+        cursor = conn.cursor()
+        query = "SELECT risk_circuit_breaker FROM capital_ledger WHERE currency = %s" if DB_TYPE == "mysql" else "SELECT risk_circuit_breaker FROM capital_ledger WHERE currency = ?"
+        cursor.execute(query, (currency.upper(),))
+        row = cursor.fetchone()
+        if not row:
+            return False
+        if isinstance(row, dict):
+            val = row.get("risk_circuit_breaker", 0)
+        else:
+            val = row[0]
+        return int(val or 0) == 1
+
+
+def update_risk_circuit_breaker(currency: str, state: int) -> None:
+    """
+    Updates the risk circuit breaker state (0 = Normal, 1 = Triggered) for a specific currency.
+    """
+    with db_session() as conn:
+        cursor = conn.cursor()
+        query = "UPDATE capital_ledger SET risk_circuit_breaker = %s WHERE currency = %s" if DB_TYPE == "mysql" else "UPDATE capital_ledger SET risk_circuit_breaker = ? WHERE currency = ?"
+        cursor.execute(query, (state, currency.upper()))
+        conn.commit()
+

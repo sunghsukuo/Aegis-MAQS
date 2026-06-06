@@ -51,3 +51,25 @@ def calculate_risk_boundaries(curr_price: float, atr_14: float, beta: float, mar
         "suggested_buy_upper": suggested_buy_upper,
         "beta_adj": beta_adj
     }
+
+
+def get_dynamic_mdd_limit(market_regime: str = None) -> float:
+    """
+    Returns the dynamic maximum drawdown (MDD) warning limit based on the market regime.
+    Imports DEFAULT_MDD_LIMIT from config as fallback.
+    """
+    from core.config import DEFAULT_MDD_LIMIT
+    
+    if not market_regime:
+        return DEFAULT_MDD_LIMIT
+        
+    regime = market_regime.upper()
+    if "BULL" in regime or "RISK_ON" in regime:
+        return 0.05
+    elif "BEAR" in regime or "RISK_OFF" in regime:
+        return 0.015
+    elif "REVERSION" in regime or "RANGEBOUND" in regime or "VOLATILE" in regime:
+        return 0.03
+        
+    return DEFAULT_MDD_LIMIT
+
