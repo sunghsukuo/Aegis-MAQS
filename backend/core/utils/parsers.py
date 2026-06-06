@@ -42,12 +42,18 @@ def format_markdown_for_terminal(text: str) -> str:
     return "\n".join(formatted_lines)
 
 
-def extract_price_from_line(line: str, current_price: float) -> float:
+def extract_price_from_line(line: str, current_price: float, is_target: bool = None) -> float:
     """
     Robustly extracts the target price or stop-loss price from a line of markdown text,
     filtering out small integers (like 10, 15, 200) representing days, weights, or SMA indicators,
+    rejecting general discussion/strategy lines containing irrelevant numbers (e.g., PEG, history tickers),
     and returns the value that is closest to the current stock price.
     """
+    # Reject lines that are clearly discussion/macro paragraphs rather than direct recommendations
+    reject_keywords = ["策略", "回測", "分析師共識", "歷史", "區間為", "大盤", "年增率", "避免買入", "觸及上限"]
+    if any(k in line for k in reject_keywords):
+        return 0.0
+
     # Regex to find all numbers, including decimals and handling commas
     numbers = re.findall(r"(?:\$|NT\$|元)?\s*([\d,]+\.?[\d]*)\s*(?:元|%)?", line)
     valid_prices = []
@@ -57,12 +63,25 @@ def extract_price_from_line(line: str, current_price: float) -> float:
         if not num_str_clean:
             continue
         try:
+            # Prevent matching leading-zero ticker numbers like 0050
+            if num_str.startswith("00") and len(num_str_clean) >= 4:
+                continue
+                
             val = float(num_str_clean)
             # Filter out standard non-price metrics (e.g. 50-day, 200-day, 10% weight) 
-            # if they are far away from the actual price.
             if val in [5.0, 10.0, 15.0, 20.0, 50.0, 200.0]:
                 if current_price and abs(val - current_price) / current_price > 0.5:
                     continue
+            
+            # Directional validation:
+            # Target price must be higher than current price (within 10% buffer)
+            # Stop loss must be lower than current price (within 10% buffer)
+            if current_price:
+                if is_target is True and val < current_price * 0.9:
+                    continue
+                if is_target is False and val > current_price * 1.1:
+                    continue
+                    
             valid_prices.append(val)
         except ValueError:
             continue
@@ -72,8 +91,10 @@ def extract_price_from_line(line: str, current_price: float) -> float:
             closest_price = min(valid_prices, key=lambda x: abs(x - current_price))
             if abs(closest_price - current_price) / current_price < 0.6:
                 return closest_price
+            return 0.0  # Reject values that are too far away
         return valid_prices[-1]  # Fallback to the last matched number
     return 0.0
+
 
 
 def extract_range_from_line(line: str, current_price: float) -> str:

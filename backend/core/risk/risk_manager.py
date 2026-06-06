@@ -56,20 +56,29 @@ def calculate_risk_boundaries(curr_price: float, atr_14: float, beta: float, mar
 def get_dynamic_mdd_limit(market_regime: str = None) -> float:
     """
     Returns the dynamic maximum drawdown (MDD) warning limit based on the market regime.
-    Imports DEFAULT_MDD_LIMIT from config as fallback.
+    Applies multipliers from core.config to DEFAULT_MDD_LIMIT to adjust limits up/down dynamically.
     """
-    from core.config import DEFAULT_MDD_LIMIT
+    from core.config import (
+        DEFAULT_MDD_LIMIT,
+        BULL_MDD_MULTIPLIER,
+        BEAR_MDD_MULTIPLIER,
+        RANGEBOUND_MDD_MULTIPLIER
+    )
     
     if not market_regime:
         return DEFAULT_MDD_LIMIT
         
     regime = market_regime.upper()
+    limit = DEFAULT_MDD_LIMIT
+    
     if "BULL" in regime or "RISK_ON" in regime:
-        return 0.05
+        limit = DEFAULT_MDD_LIMIT * BULL_MDD_MULTIPLIER
     elif "BEAR" in regime or "RISK_OFF" in regime:
-        return 0.015
+        limit = DEFAULT_MDD_LIMIT * BEAR_MDD_MULTIPLIER
     elif "REVERSION" in regime or "RANGEBOUND" in regime or "VOLATILE" in regime:
-        return 0.03
+        limit = DEFAULT_MDD_LIMIT * RANGEBOUND_MDD_MULTIPLIER
         
-    return DEFAULT_MDD_LIMIT
+    # Apply a sanity lower bound of 0.5% (0.005) and upper bound of 20% (0.20)
+    return max(0.005, min(limit, 0.20))
+
 

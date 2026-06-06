@@ -114,6 +114,30 @@ class TestRiskManager(unittest.TestCase):
         self.assertAlmostEqual(res["suggested_sl"], 94.0)
         self.assertAlmostEqual(res["suggested_tp"], 107.5)
 
+    def test_dynamic_mdd_limit(self):
+        from core.risk.risk_manager import get_dynamic_mdd_limit
+        from core.config import DEFAULT_MDD_LIMIT, BULL_MDD_MULTIPLIER, BEAR_MDD_MULTIPLIER, RANGEBOUND_MDD_MULTIPLIER
+        
+        # Test Default fallback
+        self.assertAlmostEqual(get_dynamic_mdd_limit(None), DEFAULT_MDD_LIMIT)
+        self.assertAlmostEqual(get_dynamic_mdd_limit("UNKNOWN_REGIME"), DEFAULT_MDD_LIMIT)
+        
+        # Test Bull Market Regime
+        expected_bull = max(0.005, min(DEFAULT_MDD_LIMIT * BULL_MDD_MULTIPLIER, 0.20))
+        self.assertAlmostEqual(get_dynamic_mdd_limit("BULL_MARKET"), expected_bull)
+        self.assertAlmostEqual(get_dynamic_mdd_limit("RISK_ON"), expected_bull)
+        
+        # Test Bear Market Regime
+        expected_bear = max(0.005, min(DEFAULT_MDD_LIMIT * BEAR_MDD_MULTIPLIER, 0.20))
+        self.assertAlmostEqual(get_dynamic_mdd_limit("BEAR_MARKET"), expected_bear)
+        self.assertAlmostEqual(get_dynamic_mdd_limit("RISK_OFF"), expected_bear)
+        
+        # Test Rangebound/Reversion Regime
+        expected_range = max(0.005, min(DEFAULT_MDD_LIMIT * RANGEBOUND_MDD_MULTIPLIER, 0.20))
+        self.assertAlmostEqual(get_dynamic_mdd_limit("RANGEBOUND"), expected_range)
+        self.assertAlmostEqual(get_dynamic_mdd_limit("VOLATILE"), expected_range)
+
+
 class TestTrailingStop(unittest.TestCase):
     def test_breakeven_stop_no_trigger(self):
         from core.risk.trailing_stop import check_and_apply_breakeven_stop

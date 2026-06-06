@@ -102,10 +102,10 @@ def research_and_track_asset(
     lines = stock_report.split("\n")
     for line in lines:
         if "目標價" in line or "中線目標價" in line:
-            parsed_val = extract_price_from_line(line, curr_price)
+            parsed_val = extract_price_from_line(line, curr_price, is_target=True)
             if parsed_val > 0.0: target_p = parsed_val
         elif "停損點" in line or "防禦停損點" in line:
-            parsed_val = extract_price_from_line(line, curr_price)
+            parsed_val = extract_price_from_line(line, curr_price, is_target=False)
             if parsed_val > 0.0: stop_l = parsed_val
         elif "投資評級" in line:
             line_upper = line.upper()
