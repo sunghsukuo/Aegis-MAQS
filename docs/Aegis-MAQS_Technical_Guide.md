@@ -379,27 +379,27 @@ $$\text{MDD\_LIMIT} = f(\text{Macro Regime}, \text{Price Regime})$$
 
 ---
 
-### 3. 逐步導入實施時程規劃 (Roadmap)
+### 3. 實作規劃 (Implementation Plan)
 
-本規劃將分為四個階段，以敏捷迭代的方式逐步安全導入系統：
+本規劃將分為以下四個核心階段進行系統的實作與導入：
 
-#### 📅 導入時程表
-*   **【第一階段】動態風控與配置模組升級 (第一週)**
-    *   **工作內容**：在 `risk_manager.py` 中新增 `get_dynamic_mdd_limit(regime)` 函數；在 `config.py` 中新增可配置環境變數 `DEFAULT_MDD_LIMIT`。
+#### ⚙️ 實作階段說明
+*   **【第一階段】動態風控與配置模組升級**
+    *   **實作內容**：在 `risk_manager.py` 中新增 `get_dynamic_mdd_limit(regime)` 函數；在 `config.py` 中新增可配置環境變數 `DEFAULT_MDD_LIMIT`。
     *   **交付物**：支援隨市場情境動態計算與更改 MDD 警戒線的運算單元。
-*   **【第二階段】熔斷機制資料庫整合與 Budget 攔截 (第二週)**
-    *   **工作內容**：
+*   **【第二階段】熔斷機制資料庫整合與 Budget 攔截**
+    *   **實作內容**：
         1. 在資料庫 `capital_ledger` 表中新增 `risk_circuit_breaker` 欄位（`TINYINT DEFAULT 0`）。
         2. 修改 `BudgetAgent` 的資金配發流程：分配預算前，必須先 SQL 查詢 `risk_circuit_breaker` 狀態。若為 `1`，則強制返回配置金額為 `0`，並輸出警告日誌。
     *   **交付物**：具備資金買入防護的熔斷控制鏈。
-*   **【第三階段】風控守門員 Daemon 化與 LINE 實時警報 (第三週)**
-    *   **工作內容**：
+*   **【第三階段】風控守門員 Daemon 化與 LINE 實時警報**
+    *   **實作內容**：
         1. 改寫 `check_portfolio.py`，新增 `--daemon` 執行模式，利用 `time.sleep()` 實現盤中定時輪詢。
         2. 配置 Linux 系統服務守護進程（`systemd` 或 `supervisor`）以常駐背景執行。
         3. 當 `risk_circuit_breaker` 被觸發為 `1` 時，立即向管理員發送 LINE 緊急告警。
     *   **交付物**：常駐運行、主動推播的盤中實時風控系統。
-*   **【第四階段】日誌審計與自動反思演化集成 (第四週)**
-    *   **工作內容**：將 `agent_inference_logs` 中記錄的批次推論數據與熔斷事件進行關聯。若觸發熔斷，自動調度 `ReflectionAgent` 對引發虧損的 Prompt 進行懲罰與演化，實現自動閉環優化。
+*   **【第四階段】日誌審計與自動反思演化集成**
+    *   **實作內容**：將 `agent_inference_logs` 中記錄的批次推論數據與熔斷事件進行關聯。若觸發熔斷，自動調度 `ReflectionAgent` 對引發虧損的 Prompt 進行懲罰與演化，實現自動閉環優化。
     *   **交付物**：具備自我修正能力的完整自適應量化系統。
 
 ---
