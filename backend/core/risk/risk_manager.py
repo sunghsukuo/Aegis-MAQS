@@ -111,7 +111,7 @@ def get_dynamic_mdd_limit(market_regime: str = None, currency: str = 'TWD') -> f
     """
     Returns the dynamic maximum drawdown (MDD) warning limit based on the market regime and region.
     Applies multipliers from core.config to DEFAULT_TWD_MDD_LIMIT or DEFAULT_USD_MDD_LIMIT,
-    and scales it dynamically based on the weighted Portfolio Beta.
+    scales it dynamically based on the weighted Portfolio Beta, and adjusts it by the VIX scale.
     """
     from core.config import (
         DEFAULT_TWD_MDD_LIMIT,
@@ -121,6 +121,7 @@ def get_dynamic_mdd_limit(market_regime: str = None, currency: str = 'TWD') -> f
         BEAR_MDD_MULTIPLIER,
         RANGEBOUND_MDD_MULTIPLIER
     )
+    from core.regime.multi_factor import detect_meso_regime
     
     curr = (currency or 'TWD').upper()
     if curr == 'USD':
@@ -137,8 +138,16 @@ def get_dynamic_mdd_limit(market_regime: str = None, currency: str = 'TWD') -> f
     beta_adj = max(0.5, min(portfolio_beta, 2.0))
     adjusted_base = base_limit * beta_adj
     
+    # Fetch VIX scale from multi-factor detector
+    try:
+        meso_info = detect_meso_regime()
+        vix_scale = meso_info.get("vix_scale", 1.0)
+    except Exception:
+        vix_scale = 1.0
+        
     if not market_regime:
-        return max(0.005, min(adjusted_base, 0.20))
+        limit = adjusted_base * vix_scale
+        return max(0.005, min(limit, 0.20))
         
     regime = market_regime.upper()
     limit = adjusted_base
@@ -150,6 +159,9 @@ def get_dynamic_mdd_limit(market_regime: str = None, currency: str = 'TWD') -> f
     elif "REVERSION" in regime or "RANGEBOUND" in regime or "VOLATILE" in regime:
         limit = adjusted_base * RANGEBOUND_MDD_MULTIPLIER
         
+    # Scale the final limit by VIX scale
+    limit = limit * vix_scale
+    
     # Apply a sanity lower bound of 0.5% (0.005) and upper bound of 20% (0.20)
     return max(0.005, min(limit, 0.20))
 

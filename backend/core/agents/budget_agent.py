@@ -43,6 +43,20 @@ class BudgetAgent:
                 return dict(row)
         return {"currency": currency, "available_capital": 0.0, "reserved_cash": 0.0}
 
+    def get_ticker_sector(self, ticker: str, region: str) -> str:
+        """
+        Returns the sector code (e.g. XLK, XLF) of a given ticker.
+        """
+        try:
+            import core.db_manager as db
+            sectors = db.get_active_sectors(region)
+            for sec_code, sec_info in sectors.items():
+                if ticker in sec_info.get("constituents", []):
+                    return sec_code
+        except Exception:
+            pass
+        return "UNKNOWN"
+
     def allocate_budget(self, ticker: str, region: str, recommend_price: float, custom_weight: float = None) -> tuple:
         """
         根據當前可用資金與分配比例，為單一推薦個股分配可投資總額與計算股數。
@@ -65,9 +79,50 @@ class BudgetAgent:
             print(f"[!] 預算代理人提示：{currency} 可用資金過低 ({available:.2f})，無法為 {ticker} 分配新預算。")
             return 0.0, 0.0
             
-        # 決定分配權重 (優先採用 AI 建議權重，限制最大權重為 40% 以進行風險防護)
+        # 決定分配權重 (優先採用 AI 建議權重)
         ratio = custom_weight if custom_weight is not None and custom_weight > 0.0 else self.allocation_ratio
-        ratio = min(ratio, 0.40)
+        
+        # 獲取第二層 Meso Regime 與自適應板塊權重限制
+        from core.regime.multi_factor import detect_meso_regime
+        try:
+            meso_info = detect_meso_regime()
+            meso_regime = meso_info.get("regime", "BULL_GROWTH_ON")
+        except Exception:
+            meso_regime = "BULL_GROWTH_ON"
+            
+        # 決定此標的板塊的最大配置比率
+        sector_code = self.get_ticker_sector(ticker, region)
+        
+        # 美股板塊定義
+        is_tech_us = sector_code in ["XLK", "XLC"]
+        is_defensive_us = sector_code in ["XLP", "XLU", "XLV"]
+        
+        # 台股板塊定義 (對應 0050.TW 技術成分股與防守股)
+        tech_tw_tickers = {"2330.TW", "2454.TW", "2317.TW", "2308.TW", "2357.TW", "2382.TW", "3231.TW", "3711.TW"}
+        defensive_tw_tickers = {"1216.TW", "2412.TW", "2912.TW"}
+        is_tech_tw = ticker in tech_tw_tickers
+        is_defensive_tw = ticker in defensive_tw_tickers
+        
+        is_tech = is_tech_us or is_tech_tw
+        is_defensive = is_defensive_us or is_defensive_tw
+        
+        # 三層自適應決策漏斗 —— 預算限制矩陣
+        max_ratio = 0.40  # 預設上限
+        
+        if meso_regime == "BULL_GROWTH_ON":
+            # 科技多頭：科技股上限為 40%，非科技股上限縮至 20%
+            max_ratio = 0.40 if is_tech else 0.20
+        elif meso_regime == "BULL_VALUE_ON":
+            # 傳統多頭：傳統股/價值股上限為 40%，科技股上限縮至 20%
+            max_ratio = 0.20 if is_tech else 0.40
+        elif meso_regime == "VOLATILE_PANIC":
+            # 高波震盪：全域上限降低至 20% 防禦
+            max_ratio = 0.20
+        elif meso_regime == "BEAR_RISK_OFF":
+            # 系統性空頭：防禦性板塊上限為 30%，進攻性板塊上限為 10%
+            max_ratio = 0.30 if is_defensive else 0.10
+            
+        ratio = min(ratio, max_ratio)
         
         # 計算分配金額 (可用資金 * 權重)
         target_budget = available * ratio

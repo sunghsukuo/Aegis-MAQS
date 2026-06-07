@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 import sys
 from pathlib import Path
 
@@ -114,7 +115,17 @@ class TestRiskManager(unittest.TestCase):
         self.assertAlmostEqual(res["suggested_sl"], 94.0)
         self.assertAlmostEqual(res["suggested_tp"], 107.5)
 
-    def test_dynamic_mdd_limit(self):
+    @patch("core.regime.multi_factor.detect_meso_regime")
+    def test_dynamic_mdd_limit(self, mock_detect):
+        # Default mock: vix_scale = 1.0 (calm market)
+        mock_detect.return_value = {
+            "regime": "BULL_GROWTH_ON",
+            "vix": 15.0,
+            "vix_scale": 1.0,
+            "growth_ratio": 1.0,
+            "risk_appetite": 1.0
+        }
+        
         from core.risk.risk_manager import get_dynamic_mdd_limit, calculate_portfolio_beta
         from core.config import (
             DEFAULT_TWD_MDD_LIMIT,
@@ -152,6 +163,16 @@ class TestRiskManager(unittest.TestCase):
         expected_twd_range = max(0.005, min(DEFAULT_TWD_MDD_LIMIT * beta_twd * RANGEBOUND_MDD_MULTIPLIER, 0.20))
         self.assertAlmostEqual(get_dynamic_mdd_limit("RANGEBOUND", "TWD"), expected_twd_range)
 
+        # Test VIX scale = 0.5 (panic mode)
+        mock_detect.return_value["vix_scale"] = 0.5
+        expected_usd_bear_panic = max(0.005, min(DEFAULT_USD_MDD_LIMIT * beta_usd * BEAR_MDD_MULTIPLIER * 0.5, 0.20))
+        self.assertAlmostEqual(get_dynamic_mdd_limit("BEAR_MARKET", "USD"), expected_usd_bear_panic)
+
+        # Test VIX scale = 1.2 (extremely calm mode)
+        mock_detect.return_value["vix_scale"] = 1.2
+        expected_twd_bull_calm = max(0.005, min(DEFAULT_TWD_MDD_LIMIT * beta_twd * BULL_MDD_MULTIPLIER * 1.2, 0.20))
+        self.assertAlmostEqual(get_dynamic_mdd_limit("BULL_MARKET", "TWD"), expected_twd_bull_calm)
+
 
 
 
@@ -177,6 +198,74 @@ class TestTrailingStop(unittest.TestCase):
             # but we can verify the logic branch was reached.
             triggered = True
         self.assertTrue(triggered)
+
+
+class TestBudgetAgent(unittest.TestCase):
+
+    @patch("core.agents.budget_agent.BudgetAgent.get_capital_state")
+    @patch("core.db_manager.get_risk_circuit_breaker")
+    @patch("core.regime.multi_factor.detect_meso_regime")
+    @patch("core.agents.budget_agent.BudgetAgent.get_ticker_sector")
+    @patch("core.agents.budget_agent.execute_sql")
+    def test_budget_allocation_under_regimes(self, mock_sql, mock_sector, mock_detect, mock_breaker, mock_state):
+        from core.agents.budget_agent import BudgetAgent
+        
+        # Setup mocks
+        mock_breaker.return_value = False
+        mock_state.return_value = {"currency": "USD", "available_capital": 10000.0, "reserved_cash": 0.0}
+        
+        agent = BudgetAgent(allocation_ratio=0.50)  # Request 50% to trigger max limits
+        
+        # 1. Test BULL_GROWTH_ON
+        mock_detect.return_value = {"regime": "BULL_GROWTH_ON", "vix_scale": 1.0}
+        
+        # Tech Stock (AAPL) - Limit should be 40%
+        mock_sector.return_value = "XLK"
+        amount, shares = agent.allocate_budget("AAPL", "US", 100.0)
+        # 10000 * min(0.50, 0.40) = 4000.0. Shares = 40.
+        self.assertAlmostEqual(amount, 4000.0)
+        self.assertEqual(shares, 40)
+        
+        # Non-Tech Stock (XOM) - Limit should be 20%
+        mock_sector.return_value = "XLE"
+        amount, shares = agent.allocate_budget("XOM", "US", 100.0)
+        # 10000 * min(0.50, 0.20) = 2000.0. Shares = 20.
+        self.assertAlmostEqual(amount, 2000.0)
+        self.assertEqual(shares, 20)
+        
+        # 2. Test BULL_VALUE_ON
+        mock_detect.return_value = {"regime": "BULL_VALUE_ON", "vix_scale": 1.0}
+        
+        # Tech Stock (AAPL) - Limit should be 20%
+        mock_sector.return_value = "XLK"
+        amount, shares = agent.allocate_budget("AAPL", "US", 100.0)
+        self.assertAlmostEqual(amount, 2000.0)
+        
+        # Non-Tech Stock (XOM) - Limit should be 40%
+        mock_sector.return_value = "XLE"
+        amount, shares = agent.allocate_budget("XOM", "US", 100.0)
+        self.assertAlmostEqual(amount, 4000.0)
+        
+        # 3. Test BEAR_RISK_OFF
+        mock_detect.return_value = {"regime": "BEAR_RISK_OFF", "vix_scale": 1.0}
+        
+        # Defensive Stock (PG) - Limit should be 30%
+        mock_sector.return_value = "XLP"
+        amount, shares = agent.allocate_budget("PG", "US", 100.0)
+        self.assertAlmostEqual(amount, 3000.0)
+        
+        # Offensive Stock (AAPL) - Limit should be 10%
+        mock_sector.return_value = "XLK"
+        amount, shares = agent.allocate_budget("AAPL", "US", 100.0)
+        self.assertAlmostEqual(amount, 1000.0)
+        
+        # 4. Test VOLATILE_PANIC
+        mock_detect.return_value = {"regime": "VOLATILE_PANIC", "vix_scale": 1.0}
+        mock_sector.return_value = "XLK"
+        amount, shares = agent.allocate_budget("AAPL", "US", 100.0)
+        # All sectors capped at 20%
+        self.assertAlmostEqual(amount, 2000.0)
+
 
 if __name__ == "__main__":
     unittest.main()
