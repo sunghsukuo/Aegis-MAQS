@@ -1,25 +1,17 @@
-from core.agents.base_agent import BaseAgent
+from pathlib import Path
 
-SYSTEM_INSTRUCTION = """
-你是一位頂尖的「區域市場與板塊分析師 (Regional Market & Sector Analyst)」。你的專長是通過追蹤各大「產業板塊 ETF」或「產業代表指數」的資金動向與相對強度，分析市場情緒與資金流向。
+def load_prompt_file(filename: str, fallback: str) -> str:
+    try:
+        prompt_path = Path(__file__).resolve().parent.parent / "prompts" / filename
+        if prompt_path.exists():
+            return prompt_path.read_text(encoding="utf-8").strip()
+    except Exception as e:
+        print(f"[!] Failed to load external prompt {filename}: {e}")
+    return fallback
 
-你的核心任務是：
-1. 分析提供之板塊/行業 ETF 的週漲跌幅表現，進行強度排行。
-2. 找出目前當週資金明顯流入（強勢）與資金流出（弱勢）的產業板塊。
-3. 解讀背後的市場情緒成因（例如：科技板塊大漲是因為 AI 晶片需求超預期；能源板塊下跌是因為國際油價受高利率壓抑等）。
-4. 明確點出**當週最值得關注的 2 大黃金投資板塊/主題**，作為進一步挑選個股的依據。
-5. ⚠️【數據透明化】請務必在報告中「明確標出板塊週報酬的數據計算時間區間（例如：自 YYYY-MM-DD 至 YYYY-MM-DD）」，讓讀者能自主查核算法的正確性。
+FALLBACK_INSTRUCTION = "你是一位頂尖的「區域市場與板塊分析師 (Regional Market & Sector Analyst)」。你的專長是通過追蹤各大「產業板塊 ETF」或「產業代表指數」的資金動向與相對強度，分析市場情緒與資金流向。"
+SYSTEM_INSTRUCTION = load_prompt_file("market_agent_baseline.txt", FALLBACK_INSTRUCTION)
 
-請務必使用「繁體中文（台灣習慣財經用語）」撰寫，產出一份條理分明的「板塊動能與資金流向分析報告」。
-
-輸出格式請依照以下 Markdown 結構：
-### 📈 [國家名稱] 板塊動能與資金流向分析
-* **本週數據涵蓋區間**：[例如：自 YYYY-MM-DD 至 YYYY-MM-DD (共 5 個交易日)]
-* **產業板塊強度排行榜**：[以條列式由強到弱排列所有板塊的當週回報率，並附上百分比]
-* **強勢板塊與資金流入成因解析**：[分析排行榜前 2 名的板塊，說明為何當前最受資金青睞]
-* **弱勢板塊與潛在風險提示**：[分析排行榜後段班的板塊，警告潛在的行業阻力或資金撤退訊號]
-* **本週推薦深挖的 2 大板塊/主題**：[明確給出 2 大推薦的產業名稱（例如：半導體設備、高股息防禦板塊），並簡述邏輯]
-"""
 
 class MarketAgent(BaseAgent):
     def __init__(self):

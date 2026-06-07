@@ -716,16 +716,26 @@ def resolve_ticker_and_region_via_llm(query_str: str) -> tuple:
     Uses a quick LLM call to resolve name or ticker to (standard_ticker, region_code, company_name, company_name_zh).
     Returns (None, None, None, None) if unresolved.
     """
+    from pathlib import Path
+    
+    fallback_instruction = (
+        "You are a financial database utility. Your job is to translate a user's input (stock name, Chinese name, or ticker) "
+        "into standard format: standard Yahoo Finance ticker, region code ('US' or 'Taiwan'), English official company name, and Chinese official company name. "
+        "Format your response strictly as a JSON object: {\"ticker\": \"...\", \"region\": \"...\", \"company_name\": \"...\", \"company_name_zh\": \"...\"}."
+    )
+    
+    system_instruction = fallback_instruction
+    try:
+        prompt_path = Path(__file__).resolve().parent.parent / "prompts" / "ticker_resolver_baseline.txt"
+        if prompt_path.exists():
+            system_instruction = prompt_path.read_text(encoding="utf-8").strip()
+    except Exception as e:
+        print(f"[!] Failed to load external prompt ticker_resolver_baseline.txt: {e}")
+
     resolver = BaseAgent(
         name="TickerResolver",
         role="Financial Ticker Translator",
-        system_instruction=(
-            "You are a financial database utility. Your job is to translate a user's input (stock name, Chinese name, or ticker) "
-            "into standard format: standard Yahoo Finance ticker, region code ('US' or 'Taiwan'), English official company name, and Chinese official company name. "
-            "Format your response strictly as a JSON object: {\"ticker\": \"...\", \"region\": \"...\", \"company_name\": \"...\", \"company_name_zh\": \"...\"}. "
-            "Specifically for Taiwan stocks, note that Yahoo Finance uses '.TW' for TWSE (Main board) listed companies and '.TWO' for TPEx (OTC/GreTai board) listed companies (e.g., TSMC is '2330.TW', but TPEx companies like IGS 鈊象 must be '3293.TWO', 8070 晉泰 must be '8070.TWO', etc.). Make sure to resolve the correct board suffix (.TW vs .TWO) based on your financial database knowledge. "
-            "No markdown formatting, no code block backticks, no explanations. Just raw JSON."
-        )
+        system_instruction=system_instruction
     )
     try:
         resp = resolver.run(f"Translate this input: {query_str}")
@@ -931,9 +941,13 @@ def run_realtime_query(query_str: str, track_option: bool, report_date: str):
 
 ---
 
+## 🏦 第二章：投行量化估值模型報告 (Equity Valuation Engine Report)
+
 {valuation_report}
 
 ---
+
+## 💡 第三章：大模型深度基本面分析與決策修正 (LLM Report)
 
 {stock_report}
 """

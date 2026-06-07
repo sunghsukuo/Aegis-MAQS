@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 
 # Add backend to sys.path to allow core.* imports
-sys.path.append(str(Path(__file__).resolve().parent))
+sys.path.append(str(Path(__file__).resolve().parent.parent))
 
 from core.utils.parsers import format_markdown_for_terminal, extract_price_from_line, extract_range_from_line
 from core.utils.formatters import get_display_width, pad_left, pad_right, pad_center, get_progress_bar

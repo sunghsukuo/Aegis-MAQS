@@ -2,8 +2,8 @@ import sys
 from pathlib import Path
 import json
 
-# Add current directory to path
-sys.path.append(str(Path(__file__).resolve().parent))
+# Add backend directory to path
+sys.path.append(str(Path(__file__).resolve().parent.parent))
 
 from core.config import REGIONS
 import core.db_manager as db

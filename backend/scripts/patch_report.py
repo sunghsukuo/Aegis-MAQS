@@ -14,7 +14,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 # Set paths
-BACKEND_ROOT = Path(__file__).resolve().parent
+BACKEND_ROOT = Path(__file__).resolve().parent.parent
+sys.path.append(str(BACKEND_ROOT))
 load_dotenv(BACKEND_ROOT / ".env")
 
 # Color formatting

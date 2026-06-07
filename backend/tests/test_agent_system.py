@@ -3,7 +3,7 @@ import os
 from pathlib import Path
 
 # Add parent directory to path to ensure absolute imports work
-sys.path.append(str(Path(__file__).resolve().parent))
+sys.path.append(str(Path(__file__).resolve().parent.parent))
 
 # Import config, tools
 from core.config import GEMINI_API_KEY, REGIONS

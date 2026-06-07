@@ -1,35 +1,17 @@
-from core.agents.base_agent import BaseAgent
+from pathlib import Path
 
-SYSTEM_INSTRUCTION = """
-你是一位頂尖的「標的篩選與基本面分析師 (Target Selection & Fundamental Analyst)」。你的職責是深入解讀企業的財務報表與基本面經營數據，融合市場估值（如本益比 P/E、本益成長比 PEG、股價淨值比 P/B）與安全邊際，篩選出具備高勝率投資價值的優秀標的。
+def load_prompt_file(filename: str, fallback: str) -> str:
+    try:
+        prompt_path = Path(__file__).resolve().parent.parent / "prompts" / filename
+        if prompt_path.exists():
+            return prompt_path.read_text(encoding="utf-8").strip()
+    except Exception as e:
+        print(f"[!] Failed to load external prompt {filename}: {e}")
+    return fallback
 
-你需要深入剖析以下指標：
-1. 獲利能力與利潤率：毛利率、營業利益率、淨利率、股東權益報酬率 (ROE)。
-2. 成長性指標：營收年增率 (Revenue Growth)、每股盈餘年增率 (EPS Growth)。
-3. 估值水位與合理性：目前本益比 P/E、預估本益比 Forward P/E、本益成長比 PEG（低於 1.0 是否具備低估優勢？）。
-4. 財務健康度：負債權益比 (Debt to Equity Ratio)、自由現金流狀況 (Free Cash Flow)。
-5. 技術位階：股價相對於 50-day SMA 與 200-day SMA 的位階（多頭排列還是超跌？）。
-6. 投行級別量化估值模型報告 (Equity Valuation Engine)：包含 5 年期 DCF 模型與同業乘數法估值，請務必閱讀、評估並在「估值與安全邊際評估」中對比分析。
+FALLBACK_INSTRUCTION = "你是一位頂尖的「標的篩選與基本面分析師 (Target Selection & Fundamental Analyst)」。你的職責是深入解讀企業的財務報表與基本面經營數據，篩選出具備高勝率投資價值的優秀標的。"
+SYSTEM_INSTRUCTION = load_prompt_file("fundamental_agent_baseline.txt", FALLBACK_INSTRUCTION)
 
-融合提供的「總體經濟狀況」與「最新新聞催化分析」，請產出一份極具含金量的「標的基本面深度估值分析報告」，並給予非常具體的推薦買入價格區間、目標價與防守停損點。
-
-請務必使用「繁體中文（台灣習慣財經用語）」撰寫。
-
-輸出格式請依照以下 Markdown 結構：
-### 📊 [標的名/代碼] 基本面估值與投資價值評估
-* **投資評級與核心論點**：[強烈買入 Strong Buy / 買入 Buy / 持有 Hold / 賣出 Sell] (請附帶一句話最核心的核心投資亮點。注意：評級必須嚴格使用這四個標準詞彙之一，不得自創。例如「觀望」或「中立」請歸類為「持有 Hold」；「避開」請歸類為「賣出 Sell」)
-* **基本面關鍵指標深度剖析**：
-  * *成長與獲利能力*：[分析營收、EPS 增速與利潤率表現]
-  * *估值與安全邊際評估*：[分析 P/E、PEG 與歷史水平，並詳細對比投行估值模型報告中的內在合理價（DCF 與同業比較法），評論其偏離幅度（被低估/合理/被高估），說明目前價格相較於合理估值的安全邊際]
-  * *財務結構與風控防線*：[分析負債率與自由現金流，評估暴雷風險]
-* **結合總經與消息面的綜合評語**：[結合當前宏觀政策與新聞重大消息，說明該公司有何天時地利]
-* **具體投資操作指南**：
-  * **當前價格**：[現價]
-  * **推薦買入區間**：[給出合理的買入區間，如 140 - 145 元]
-  * **中線目標價**：[根據估值算出的合理中線期望價]
-  * **防禦停損點**：[根據技術均線或前波低點設定的停損位]
-  * **建議持倉權重**：[例如：適中佔比 10%、加碼配置 15% 等]
-"""
 
 class FundamentalAgent(BaseAgent):
     def __init__(self):
@@ -160,7 +142,7 @@ class FundamentalAgent(BaseAgent):
 
 輸出格式請嚴格依照以下 Markdown 結構：
 ### 📊 [{company_name} / {ticker}] 板塊技術估值與投資價值評估
-* **投資評級與核心論點**：[強烈買入 Strong Buy / 買入 Buy / 持有 Hold / 賣出 Sell] (請附帶一句話最核心的板塊輪動與技術面核心投資亮點。注意：評級必須嚴格使用這四個標準詞彙之一，不得自創。例如「觀望」或「中立」請歸類為「持有 Hold」；「避開」請歸類為「賣出 Sell」)
+* **投資評級與核心論點**：[強烈買入 Strong Buy / 買入 Buy / 持有 Hold / 賣出 Sell] (請附帶一句話最核心的板塊輪動與技術面核心投資亮點。注意：此行開頭必須嚴格使用「* **投資評級與核心論點**：」，且評級必須嚴格使用「強烈買入 Strong Buy」、「買入 Buy」、「持有 Hold」、「賣出 Sell」這四個標準詞彙之一，不得加上括號如「(Strong Buy)」，亦不得將行頭改寫為「投資建議評級」或任何其他變體，否則系統解析將出錯。)
 * **基本面與技術面關鍵指標深度剖析**：
   * *行業景氣與資金流向*：[分析該產業/板塊在當前總經環境下的發展空間與資金流入熱度]
   * *技術指標與動能評估*：[分析目前價格相對於 20MA、50MA、200MA 的均線位階，以及 RSI 狀態，判斷是否處於多頭強勢或超跌區]

@@ -16,7 +16,7 @@ import pymysql.cursors
 from dotenv import load_dotenv
 
 # Set paths
-BACKEND_ROOT = Path(__file__).resolve().parent
+BACKEND_ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(BACKEND_ROOT / ".env")
 
 # Color formatting for terminal output

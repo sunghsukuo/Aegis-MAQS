@@ -49,10 +49,13 @@ def extract_price_from_line(line: str, current_price: float, is_target: bool = N
     rejecting general discussion/strategy lines containing irrelevant numbers (e.g., PEG, history tickers),
     and returns the value that is closest to the current stock price.
     """
-    # Reject lines that are clearly discussion/macro paragraphs rather than direct recommendations
-    reject_keywords = ["策略", "回測", "分析師共識", "歷史", "區間為", "大盤", "年增率", "避免買入", "觸及上限"]
-    if any(k in line for k in reject_keywords):
-        return 0.0
+    # Reject lines that are clearly discussion/macro paragraphs rather than direct recommendations.
+    # If the line is a formatted bullet point (e.g. starting with '*' and containing '**'), bypass this filter.
+    is_guide_line = line.strip().startswith("*") and "**" in line
+    if not is_guide_line:
+        reject_keywords = ["策略", "回測", "分析師共識", "歷史", "區間為", "大盤", "年增率", "避免買入", "觸及上限"]
+        if any(k in line for k in reject_keywords):
+            return 0.0
 
     # Regex to find all numbers, including decimals and handling commas
     numbers = re.findall(r"(?:\$|NT\$|元)?\s*([\d,]+\.?[\d]*)\s*(?:元|%)?", line)
@@ -74,12 +77,12 @@ def extract_price_from_line(line: str, current_price: float, is_target: bool = N
                     continue
             
             # Directional validation:
-            # Target price must be higher than current price (within 10% buffer)
-            # Stop loss must be lower than current price (within 10% buffer)
+            # Target price must be strictly greater than current price.
+            # Stop loss must be strictly less than current price.
             if current_price:
-                if is_target is True and val < current_price * 0.9:
+                if is_target is True and val <= current_price:
                     continue
-                if is_target is False and val > current_price * 1.1:
+                if is_target is False and val >= current_price:
                     continue
                     
             valid_prices.append(val)
