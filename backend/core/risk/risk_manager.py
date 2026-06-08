@@ -1,15 +1,14 @@
 import math
 
-def calculate_risk_boundaries(curr_price: float, atr_14: float, beta: float, market_regime: str = None) -> dict:
+def calculate_risk_boundaries(curr_price: float, atr_14: float, beta: float, macro_regime: str = None) -> dict:
     """
     Calculates dynamic stop-loss, take-profit, and buy range boundaries
-    based on Beta-adjusted ATR, adapting parameters based on the market regime.
+    based on Beta-adjusted ATR, adapting parameters based on the macro regime.
     """
     beta_bounded = max(0.3, min(beta or 1.0, 3.0))
     beta_adj = math.sqrt(beta_bounded)
     
-    regime = (market_regime or "MOMENTUM_TREND").upper()
-    
+    regime = (macro_regime or "MOMENTUM_TREND").upper()    
     # Adapt multipliers based on regime
     if "REVERSION" in regime or "RANGEBOUND" in regime or regime == "MEAN_REVERSION_RANGE":
         # Mean Reversion / Rangebound: tighter profit targets & tight stop-loss
@@ -107,9 +106,9 @@ def calculate_portfolio_beta(currency: str = 'TWD') -> float:
     return 1.0
 
 
-def get_dynamic_mdd_limit(market_regime: str = None, currency: str = 'TWD') -> float:
+def get_dynamic_mdd_limit(macro_regime: str = None, currency: str = 'TWD') -> float:
     """
-    Returns the dynamic maximum drawdown (MDD) warning limit based on the market regime and region.
+    Returns the dynamic maximum drawdown (MDD) warning limit based on the macro regime and region.
     Applies multipliers from core.config to DEFAULT_TWD_MDD_LIMIT or DEFAULT_USD_MDD_LIMIT,
     scales it dynamically based on the weighted Portfolio Beta, and adjusts it by the VIX scale.
     """
@@ -145,11 +144,11 @@ def get_dynamic_mdd_limit(market_regime: str = None, currency: str = 'TWD') -> f
     except Exception:
         vix_scale = 1.0
         
-    if not market_regime:
+    if not macro_regime:
         limit = adjusted_base * vix_scale
         return max(0.005, min(limit, 0.20))
         
-    regime = market_regime.upper()
+    regime = macro_regime.upper()
     limit = adjusted_base
     
     if "BULL" in regime or "RISK_ON" in regime:
