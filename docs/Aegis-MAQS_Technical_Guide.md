@@ -58,7 +58,8 @@ backend/
     │       └── dashboard_tpl.html # 看板之 Jinja2 HTML 樣式範本
     ├── utils/              # 通用公用程式模組 (Shared Utilities)
     │   ├── formatters.py          # CJK 中日韓字元寬度對齊格式化器
-    │   ├── parsers.py             # LLM 輸出清洗與 Regex 價格/區間提取器
+    │   └── parsers.py             # LLM 輸出清洗與 Regex 價格/區間提取器
+    ├── pipelines/          # 核心流程管線編排模組 (Workflow Pipelines)
     │   └── research_pipeline.py   # 系統核心投研與分析管線 (包含週報、個股查詢等核心工作流)
     ├── tools/              # 實體功能輔助工具 (Helper Tools)
     │   ├── line_notifier.py       # LINE 訊息 API 發送器 (日報與崩潰報警)

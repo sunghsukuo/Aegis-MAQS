@@ -9,7 +9,7 @@ sys.path.append(str(Path(__file__).resolve().parent))
 from core.config import REPORTS_DIR
 
 # Import core workflows and printing helpers
-from core.utils.research_pipeline import (
+from core.pipelines.research_pipeline import (
     run_report_pipeline, 
     run_realtime_query, 
     run_prompt_evolution_test,

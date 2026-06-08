@@ -1,4 +1,6 @@
 from pathlib import Path
+from core.agents.base_agent import BaseAgent
+from core.config import REPORT_LANGUAGE, WRITER_GEMINI_MODEL
 
 def load_prompt_file(filename: str, fallback: str) -> str:
     try:

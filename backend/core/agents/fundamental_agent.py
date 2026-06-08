@@ -1,4 +1,5 @@
 from pathlib import Path
+from core.agents.base_agent import BaseAgent
 
 def load_prompt_file(filename: str, fallback: str) -> str:
     try:
