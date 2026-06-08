@@ -15,7 +15,7 @@ from core.config import (
     BACKEND_ROOT
 )
 import core.db_manager as db
-from core.regime.registry import get_macro_regime
+from core.regime.registry import get_market_regime
 from core.regime.multi_factor import detect_meso_regime
 from core.risk.risk_manager import calculate_portfolio_beta, get_dynamic_mdd_limit
 import core.tools.yahoo_finance as yf_tool
@@ -87,7 +87,7 @@ def main():
     print(f"  • 當前 VIX 波動調整係數 (vix_scale): {vix_scale:.4f}")
     
     # 2. TWD Pocket Details
-    twd_r = get_macro_regime('Taiwan').get('regime', 'VOLATILE_RANGEBOUND')
+    twd_r = get_market_regime('Taiwan').get('regime', 'VOLATILE_RANGEBOUND')
     twd_beta = calculate_portfolio_beta('TWD')
     twd_holdings, twd_total_value = get_portfolio_holdings_details('TWD')
     
@@ -114,7 +114,7 @@ def main():
             print(f"    - {h['ticker']} ({h['name']}) | 市值: {h['value']:,.2f} TWD | 權重: {h['weight']*100:.1f}% | Beta: {h['beta']:.2f}")
 
     # 3. USD Pocket Details
-    usd_r = get_macro_regime('US').get('regime', 'VOLATILE_RANGEBOUND')
+    usd_r = get_market_regime('US').get('regime', 'VOLATILE_RANGEBOUND')
     usd_beta = calculate_portfolio_beta('USD')
     usd_holdings, usd_total_value = get_portfolio_holdings_details('USD')
     

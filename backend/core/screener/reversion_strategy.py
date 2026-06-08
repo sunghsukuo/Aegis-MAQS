@@ -4,7 +4,7 @@ import numpy as np
 from core.screener.base import BaseScreener
 
 class ReversionScreener(BaseScreener):
-    def screen_stocks(self, etf_ticker: str, region: str, limit: int = 5, macro_regime: str = None) -> list:
+    def screen_stocks(self, etf_ticker: str, region: str, limit: int = 5, market_regime: str = None) -> list:
         """
         Implements Pullback / Mean Reversion Screening.
         Focuses on high-quality stocks that are short-term oversold (low RSI) but in a long-term uptrend (above 200MA),

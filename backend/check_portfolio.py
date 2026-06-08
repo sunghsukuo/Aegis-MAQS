@@ -284,12 +284,14 @@ def run_portfolio_check(report_date: str, regions: list = None):
                 current_mdd = metrics.get("mdd", 0.0)
                 
                 # Fetch dynamic limit based on regime
-                from core.regime.registry import get_macro_regime
+                from core.regime.registry import get_market_regime
                 from core.risk.risk_manager import get_dynamic_mdd_limit
                 
-                regime_info = get_macro_regime(region_filter)
+                regime_info = get_market_regime(region_filter)
                 regime_name = regime_info.get("regime", "VOLATILE_RANGEBOUND")
-                mdd_limit = get_dynamic_mdd_limit(regime_name, curr)                
+                mdd_limit = get_dynamic_mdd_limit(regime_name, curr)
+
+                
                 triggered = (current_mdd > mdd_limit) or (current_drop > mdd_limit)
                 
                 # Sync circuit breaker state in database

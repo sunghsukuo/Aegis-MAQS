@@ -5,12 +5,12 @@ class ScreenerFactory:
     _instances = {}
 
     @classmethod
-    def get_screener(cls, macro_regime: str = None):
+    def get_screener(cls, market_regime: str = None):
         """
-        Factory method to return the appropriate screener strategy based on macro regime.
+        Factory method to return the appropriate screener strategy based on market regime.
         """
         # Clean regime string
-        regime = (macro_regime or "MOMENTUM_TREND").upper()
+        regime = (market_regime or "MOMENTUM_TREND").upper()
         
         if "REVERSION" in regime or "RANGEBOUND" in regime or regime == "MEAN_REVERSION_RANGE":
             strategy_name = "reversion"

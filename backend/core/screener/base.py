@@ -163,7 +163,7 @@ class BaseScreener:
         })
         print(f"[✓] [Screener] 已成功將 ETF 代理標的 {etf_ticker} 寫入選股報告記錄。")
 
-    def screen_stocks(self, etf_ticker: str, region: str, limit: int = 5, macro_regime: str = None) -> list:
+    def screen_stocks(self, etf_ticker: str, region: str, limit: int = 5, market_regime: str = None) -> list:
         """Abstract method to be implemented by subclass strategies."""
         raise NotImplementedError("Subclasses must implement screen_stocks")
 

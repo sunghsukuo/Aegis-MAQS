@@ -314,11 +314,11 @@ def main():
         usd_mdd = usd_metrics.get("mdd", 0.0)
 
         # 3. Determine if watchdog alert is triggered (MDD > dynamic warning limit or drop from peak > dynamic warning limit)
-        from core.regime.registry import get_macro_regime
+        from core.regime.registry import get_market_regime
         from core.risk.risk_manager import get_dynamic_mdd_limit
         
-        twd_regime_info = get_macro_regime("Taiwan")
-        usd_regime_info = get_macro_regime("US")
+        twd_regime_info = get_market_regime("Taiwan")
+        usd_regime_info = get_market_regime("US")
         
         twd_regime_name = twd_regime_info.get("regime", "VOLATILE_RANGEBOUND")
         usd_regime_name = usd_regime_info.get("regime", "VOLATILE_RANGEBOUND")
