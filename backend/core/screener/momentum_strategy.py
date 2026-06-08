@@ -3,7 +3,7 @@ import pandas as pd
 from core.screener.base import BaseScreener
 
 class MomentumScreener(BaseScreener):
-    def screen_stocks(self, etf_ticker: str, region: str, limit: int = 5, market_regime: str = None) -> list:
+    def screen_stocks(self, etf_ticker: str, region: str, limit: int = 5, macro_regime: str = None) -> list:
         """
         Implements Trend-Following / Momentum Screening.
         Calculates 5-day return momentum, volume surge, and applies dynamic regime weights/penalties.
@@ -67,14 +67,14 @@ class MomentumScreener(BaseScreener):
                 return_score = weekly_return * 100
                 volume_score = min(volume_spike, 3.0) / 3.0 * 10.0
                 
-                if market_regime == "BEAR_RISK_OFF":
+                if macro_regime == "BEAR_RISK_OFF":
                     daily_returns = hist["Close"].pct_change()
                     daily_vol = float(daily_returns.iloc[-20:].std() * 100)
                     if pd.isna(daily_vol): 
                         daily_vol = 0.0
                     vol_penalty = min(daily_vol * 1.5, 5.0)
                     combined_score = (return_score * 0.3) + (volume_score * 0.7) - vol_penalty
-                elif market_regime == "VOLATILE_RANGEBOUND":
+                elif macro_regime == "VOLATILE_RANGEBOUND":
                     daily_returns = hist["Close"].pct_change()
                     daily_vol = float(daily_returns.iloc[-20:].std() * 100)
                     if pd.isna(daily_vol): 

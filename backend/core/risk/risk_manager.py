@@ -1,6 +1,6 @@
 import math
 
-def calculate_risk_boundaries(curr_price: float, atr_14: float, beta: float, market_regime: str = None) -> dict:
+def calculate_risk_boundaries(curr_price: float, atr_14: float, beta: float, macro_regime: str = None) -> dict:
     """
     Calculates dynamic stop-loss, take-profit, and buy range boundaries
     based on Beta-adjusted ATR, adapting parameters based on the market regime.
@@ -8,10 +8,16 @@ def calculate_risk_boundaries(curr_price: float, atr_14: float, beta: float, mar
     beta_bounded = max(0.3, min(beta or 1.0, 3.0))
     beta_adj = math.sqrt(beta_bounded)
     
-    regime = (market_regime or "MOMENTUM_TREND").upper()
+    regime = (macro_regime or "VOLATILE_RANGEBOUND").upper()
     
     # Adapt multipliers based on regime
-    if "REVERSION" in regime or "RANGEBOUND" in regime or regime == "MEAN_REVERSION_RANGE":
+    if "BEAR" in regime or "RISK_OFF" in regime:
+        # Bear Market / Risk Off: tightest defensive parameters
+        k1 = 1.0 * beta_adj
+        k2 = 1.2 * beta_adj
+        buy_lower_multiplier = 0.5 * beta_adj
+        buy_upper_multiplier = 0.1 * beta_adj
+    elif "REVERSION" in regime or "RANGEBOUND" in regime or regime == "MEAN_REVERSION_RANGE":
         # Mean Reversion / Rangebound: tighter profit targets & tight stop-loss
         k1 = 1.2 * beta_adj
         k2 = 1.5 * beta_adj
@@ -31,7 +37,12 @@ def calculate_risk_boundaries(curr_price: float, atr_14: float, beta: float, mar
         suggested_buy_upper = curr_price + (buy_upper_multiplier * atr_14)
     else:
         # Fallbacks if metrics are missing
-        if "REVERSION" in regime or "RANGEBOUND" in regime or regime == "MEAN_REVERSION_RANGE":
+        if "BEAR" in regime or "RISK_OFF" in regime:
+            suggested_sl = curr_price * 0.97  # 3% stop-loss
+            suggested_tp = curr_price * 1.04  # 4% target price
+            suggested_buy_lower = curr_price * 0.99
+            suggested_buy_upper = curr_price * 1.005
+        elif "REVERSION" in regime or "RANGEBOUND" in regime or regime == "MEAN_REVERSION_RANGE":
             suggested_sl = curr_price * 0.95  # 5% stop-loss
             suggested_tp = curr_price * 1.08  # 8% target price
             suggested_buy_lower = curr_price * 0.98
@@ -107,9 +118,9 @@ def calculate_portfolio_beta(currency: str = 'TWD') -> float:
     return 1.0
 
 
-def get_dynamic_mdd_limit(market_regime: str = None, currency: str = 'TWD') -> float:
+def get_dynamic_mdd_limit(macro_regime: str = None, currency: str = 'TWD') -> float:
     """
-    Returns the dynamic maximum drawdown (MDD) warning limit based on the market regime and region.
+    Returns the dynamic maximum drawdown (MDD) warning limit based on the macro regime and region.
     Applies multipliers from core.config to DEFAULT_TWD_MDD_LIMIT or DEFAULT_USD_MDD_LIMIT,
     scales it dynamically based on the weighted Portfolio Beta, and adjusts it by the VIX scale.
     """
@@ -145,11 +156,11 @@ def get_dynamic_mdd_limit(market_regime: str = None, currency: str = 'TWD') -> f
     except Exception:
         vix_scale = 1.0
         
-    if not market_regime:
+    if not macro_regime:
         limit = adjusted_base * vix_scale
         return max(0.005, min(limit, 0.20))
         
-    regime = market_regime.upper()
+    regime = macro_regime.upper()
     limit = adjusted_base
     
     if "BULL" in regime or "RISK_ON" in regime:

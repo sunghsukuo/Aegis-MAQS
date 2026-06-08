@@ -16,10 +16,11 @@ class QuantScreener:
     def fetch_etf_constituents(self, etf_ticker: str) -> list:
         return ScreenerFactory.get_screener().fetch_etf_constituents(etf_ticker)
 
-    def screen_stocks(self, etf_ticker: str, region: str, limit: int = 5, market_regime: str = None) -> list:
-        # Resolve the correct strategy screener dynamically using the factory
-        screener = ScreenerFactory.get_screener(market_regime)
-        return screener.screen_stocks(etf_ticker, region=region, limit=limit, market_regime=market_regime)
+    def screen_stocks(self, etf_ticker: str, region: str, limit: int = 5, price_regime: str = None, macro_regime: str = None) -> list:
+        # Use price_regime (quantitative ADX/Hurst) to route the correct screener strategy
+        screener = ScreenerFactory.get_screener(price_regime)
+        # Pass macro_regime (qualitative LLM) into the strategy for risk weight adjustments
+        return screener.screen_stocks(etf_ticker, region=region, limit=limit, macro_regime=macro_regime)
 
     def record_proxy_etf(self, etf_ticker: str, region: str, financials: dict = None, weekly_return: float = 0.0):
         # We can record using any screener strategy since session_history is shared

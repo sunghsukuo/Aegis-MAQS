@@ -56,7 +56,7 @@ class TestUtilsFormatters(unittest.TestCase):
 
 class TestRegime(unittest.TestCase):
     def test_calculate_hurst_flat(self):
-        from core.regime.detector import calculate_hurst
+        from core.regime.price_regime import calculate_hurst
         # Generate some trending data
         ts = [100.0 + i * 2 for i in range(30)]
         h = calculate_hurst(ts)
@@ -64,13 +64,31 @@ class TestRegime(unittest.TestCase):
         self.assertTrue(isinstance(h, float))
 
     def test_regime_registry_cache(self):
-        from core.regime.registry import save_market_regime, get_market_regime
+        from core.regime.registry import save_macro_regime, get_macro_regime
         mock_regime = {"regime": "MEAN_REVERSION_RANGE", "adx": 15.4, "hurst": 0.42, "ticker": "^GSPC"}
-        save_market_regime("US_TEST", mock_regime)
-        retrieved = get_market_regime("US_TEST")
+        save_macro_regime("US_TEST", mock_regime)
+        retrieved = get_macro_regime("US_TEST")
         self.assertEqual(retrieved["regime"], "MEAN_REVERSION_RANGE")
         self.assertEqual(retrieved["adx"], 15.4)
         self.assertEqual(retrieved["hurst"], 0.42)
+
+    @patch("yfinance.Ticker")
+    def test_price_regime_detect(self, mock_ticker):
+        from core.regime.price_regime import detect
+        import pandas as pd
+        
+        # Mock historical data: 60 trading days of trending data
+        mock_hist = pd.DataFrame({
+            "Close": [100.0 + i * 2 for i in range(60)],
+            "High": [101.0 + i * 2 for i in range(60)],
+            "Low": [99.0 + i * 2 for i in range(60)]
+        })
+        mock_ticker.return_value.history.return_value = mock_hist
+        
+        res = detect("US")
+        self.assertIn("regime", res)
+        self.assertIn("adx", res)
+        self.assertIn("hurst", res)
 
 class TestScreenerFactory(unittest.TestCase):
     def test_factory_momentum_routing(self):
@@ -99,7 +117,7 @@ class TestQuantScreenerFacade(unittest.TestCase):
 class TestRiskManager(unittest.TestCase):
     def test_risk_calculation_trend(self):
         from core.risk.risk_manager import calculate_risk_boundaries
-        res = calculate_risk_boundaries(curr_price=100.0, atr_14=5.0, beta=1.0, market_regime="MOMENTUM_TREND")
+        res = calculate_risk_boundaries(curr_price=100.0, atr_14=5.0, beta=1.0, macro_regime="MOMENTUM_TREND")
         # Standard: k1=2.0, k2=3.0. For price=100, ATR=5:
         # SL = 100 - (2.0 * 5) = 90.0
         # TP = 100 + (3.0 * 5) = 115.0
@@ -108,12 +126,31 @@ class TestRiskManager(unittest.TestCase):
 
     def test_risk_calculation_reversion(self):
         from core.risk.risk_manager import calculate_risk_boundaries
-        res = calculate_risk_boundaries(curr_price=100.0, atr_14=5.0, beta=1.0, market_regime="MEAN_REVERSION_RANGE")
+        res = calculate_risk_boundaries(curr_price=100.0, atr_14=5.0, beta=1.0, macro_regime="MEAN_REVERSION_RANGE")
         # Reversion: k1=1.2, k2=1.5. For price=100, ATR=5:
         # SL = 100 - (1.2 * 5) = 94.0
         # TP = 100 + (1.5 * 5) = 107.5
         self.assertAlmostEqual(res["suggested_sl"], 94.0)
         self.assertAlmostEqual(res["suggested_tp"], 107.5)
+
+    def test_risk_calculation_bear(self):
+        from core.risk.risk_manager import calculate_risk_boundaries
+        res = calculate_risk_boundaries(curr_price=100.0, atr_14=5.0, beta=1.0, macro_regime="BEAR_RISK_OFF")
+        # Bear/Risk Off: k1=1.0, k2=1.2. For price=100, ATR=5:
+        # SL = 100 - (1.0 * 5) = 95.0
+        # TP = 100 + (1.2 * 5) = 106.0
+        self.assertAlmostEqual(res["suggested_sl"], 95.0)
+        self.assertAlmostEqual(res["suggested_tp"], 106.0)
+
+    def test_risk_calculation_default_fallback(self):
+        from core.risk.risk_manager import calculate_risk_boundaries
+        # With missing ATR/metrics, it should fall back to defaults.
+        # Since default fallback is VOLATILE_RANGEBOUND:
+        # SL = 100 * 0.95 = 95.0
+        # TP = 100 * 1.08 = 108.0
+        res = calculate_risk_boundaries(curr_price=100.0, atr_14=None, beta=1.0)
+        self.assertAlmostEqual(res["suggested_sl"], 95.0)
+        self.assertAlmostEqual(res["suggested_tp"], 108.0)
 
     @patch("core.regime.multi_factor.detect_meso_regime")
     def test_dynamic_mdd_limit(self, mock_detect):

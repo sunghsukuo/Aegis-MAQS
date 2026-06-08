@@ -138,7 +138,7 @@ def get_screener_instance():
         _global_screener = QuantScreener()
     return _global_screener
 
-def get_etf_holdings(etf_ticker: str, region: str = None, market_regime: str = None) -> list:
+def get_etf_holdings(etf_ticker: str, region: str = None, macro_regime: str = None, price_regime: str = None) -> list:
     """
     Exposes a unified dynamic constituent scanning interface for both screener scans 
     and sector evaluations. Resolves Single Source of Truth by referencing config.py.
@@ -149,7 +149,7 @@ def get_etf_holdings(etf_ticker: str, region: str = None, market_regime: str = N
     screener = get_screener_instance()
     
     # Delegate to the regime-aware dynamic screener
-    return screener.screen_stocks(etf_ticker, region=region, market_regime=market_regime)
+    return screener.screen_stocks(etf_ticker, region=region, price_regime=price_regime, macro_regime=macro_regime)
 
 @retry_on_exception(tries=3, delay=2, backoff=2)
 def _calculate_technical_metrics_raw(ticker: str) -> dict:

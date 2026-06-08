@@ -39,7 +39,7 @@ def research_and_track_asset(
     ticker: str,
     company_name: str,
     region_code: str,
-    market_regime: str,
+    macro_regime: str,
     macro_report: str,
     reflection_directives: str,
     report_date: str,
@@ -90,7 +90,7 @@ def research_and_track_asset(
 【投行級別量化估值模型報告 (Equity Valuation Engine)】:
 {valuation_report}
 """
-    stock_report = fundamental_agent.analyze(ticker, company_name, financials, news_analysis, combined_context, market_regime=market_regime)
+    stock_report = fundamental_agent.analyze(ticker, company_name, financials, news_analysis, combined_context, macro_regime=macro_regime)
     time.sleep(2)
     
     # 解析輸出參數
@@ -265,15 +265,12 @@ def run_regional_reflection(region_code: str, report_date: str) -> str:
     print_success(f"[{region_code}] 區域專屬決策反思分析完成！")
     return reflection_report
 
-def run_regional_analysis(region_code: str, report_date: str, reflection_directives: str) -> tuple:
+def analyze_macro_regime(region_code: str, dry_run: bool = False) -> tuple:
     """
-    Executes the analytical pipeline for a specific country/region:
-    Macro Analysis -> Sector Rankings -> News Scans -> Fundamental Valuation & Stock Recommendation.
+    Executes Macroeconomic Analysis via MacroAgent, logs the inference (unless dry_run),
+    and returns (macro_report, macro_regime).
     """
     region_name = REGIONS[region_code]["name"]
-    print_info(f"==================================================")
-    print_info(f"開始分析區域市場：{region_name} ({region_code})...")
-    
     # 1. Get Benchmark Performance
     benchmark_data = yf_tool.get_benchmark_performance(region_code)
     
@@ -286,27 +283,48 @@ def run_regional_analysis(region_code: str, report_date: str, reflection_directi
     raw_macro_report = macro_agent.analyze(region_name, benchmark_data, macro_news)
     
     # [Prompt Evolution Integration] Log MacroAgent's inference
-    try:
-        db.save_agent_inference_log(
-            rec_id=None,
-            agent_name="MacroAgent",
-            ticker=None,
-            input_prompt=macro_agent.last_prompt,
-            output_response=raw_macro_report,
-            prompt_version=macro_agent.prompt_version
-        )
-    except Exception as log_ex:
-        print(f"[!] Warning: 記錄 MacroAgent 推論日誌失敗: {log_ex}")
+    if not dry_run:
+        try:
+            db.save_agent_inference_log(
+                rec_id=None,
+                agent_name="MacroAgent",
+                ticker=None,
+                input_prompt=macro_agent.last_prompt,
+                output_response=raw_macro_report,
+                prompt_version=macro_agent.prompt_version
+            )
+        except Exception as log_ex:
+            print(f"[!] Warning: 記錄 MacroAgent 推論日誌失敗: {log_ex}")
         
     time.sleep(3)  # Respect free tier rate limits (15 RPM)
     
     # Parse market regime from macro report
-    regime_match = re.search(r"\[MARKET_REGIME:\s*(BULL_RISK_ON|BEAR_RISK_OFF|VOLATILE_RANGEBOUND)\]", raw_macro_report)
-    market_regime = regime_match.group(1) if regime_match else "BULL_RISK_ON"
-    print_success(f"[{region_name}] 偵測到宏觀市場狀態標籤：{market_regime}")
+    regime_match = re.search(r"\[MACRO_REGIME:\s*(BULL_RISK_ON|BEAR_RISK_OFF|VOLATILE_RANGEBOUND)\]", raw_macro_report)
+    macro_regime = regime_match.group(1) if regime_match else "BULL_RISK_ON"
+    print_success(f"[{region_name}] 偵測到宏觀市場狀態標籤：{macro_regime}")
     
     # Clean the raw tag from macro_report so it doesn't show in the final human-readable report
-    macro_report = re.sub(r"\[MARKET_REGIME:\s*(BULL_RISK_ON|BEAR_RISK_OFF|VOLATILE_RANGEBOUND)\]\s*", "", raw_macro_report)
+    macro_report = re.sub(r"\[MACRO_REGIME:\s*(BULL_RISK_ON|BEAR_RISK_OFF|VOLATILE_RANGEBOUND)\]\s*", "", raw_macro_report)
+    
+    return macro_report, macro_regime
+
+def run_regional_analysis(region_code: str, report_date: str, reflection_directives: str) -> tuple:
+    """
+    Executes the analytical pipeline for a specific country/region:
+    Macro Analysis -> Sector Rankings -> News Scans -> Fundamental Valuation & Stock Recommendation.
+    """
+    region_name = REGIONS[region_code]["name"]
+    print_info(f"==================================================")
+    print_info(f"開始分析區域市場：{region_name} ({region_code})...")
+    
+    # Run macroeconomic analysis & extract macro regime
+    macro_report, macro_regime = analyze_macro_regime(region_code)
+    
+    # Detect price regime (quantitative ADX/Hurst) for screener strategy routing
+    from core.regime.price_regime import detect as detect_price_regime
+    price_info = detect_price_regime(region_code)
+    price_regime = price_info.get("regime", "MOMENTUM_TREND")
+    print_info(f"[{region_name}] 偵測到價格氣候 (Price Regime): {price_regime} (ADX={price_info.get('adx', 'N/A'):.1f}, Hurst={price_info.get('hurst', 'N/A'):.2f})")
     
     # 4. Get Sector Rankings
     sector_rankings = yf_tool.get_sector_rankings(region_code)
@@ -387,7 +405,7 @@ def run_regional_analysis(region_code: str, report_date: str, reflection_directi
             print_info(f"[{region_name}] 板塊 {etf_ticker} 配置為直接投資 ETF 標的 (target_type: proxy)。")
         else:
             # Otherwise, target constituent stocks
-            representative_stocks = yf_tool.get_etf_holdings(etf_ticker, region=region_code, market_regime=market_regime)
+            representative_stocks = yf_tool.get_etf_holdings(etf_ticker, region=region_code, macro_regime=macro_regime, price_regime=price_regime)
             # Determine how many stocks to pull from this sector to respect our region limit
             stocks_to_analyze = max(1, MAX_STOCKS_PER_REGION - stocks_analyzed)
             # Grab at most 2 per sector for diversity if total limit allows, otherwise grab remaining
@@ -406,7 +424,7 @@ def run_regional_analysis(region_code: str, report_date: str, reflection_directi
                 ticker=ticker,
                 company_name=name,
                 region_code=region_code,
-                market_regime=market_regime,
+                macro_regime=macro_regime,
                 macro_report=macro_report,
                 reflection_directives=reflection_directives,
                 report_date=report_date,
@@ -431,7 +449,7 @@ def run_regional_analysis(region_code: str, report_date: str, reflection_directi
             print_success(f"標的 {ticker} 推薦參數與預算已成功寫入回測帳本！(現價: {res['financials'].get('current_price', 0.0):.2f} | 分配預算: {res['invested_amount']:.2f} | 股數: {res['shares']:.2f})")
             stocks_analyzed += 1
                 
-    return macro_report, market_report, "\n\n---\n\n".join(stock_analysis_reports), market_regime
+    return macro_report, market_report, "\n\n---\n\n".join(stock_analysis_reports), macro_regime
 
 def run_report_pipeline(args, report_date, regions_list, timestamp_suffix, daily_reports_dir):
     print_success("==================================================")
@@ -490,10 +508,10 @@ def run_report_pipeline(args, report_date, regions_list, timestamp_suffix, daily
             mac_rep, mkt_rep, stk_rep, regime = run_regional_analysis(r_code, report_date, reflection_directives)
             regional_regimes[region_name] = regime
             
-            # [Regime Registry Integration] Save detected market regime to cache
+            # [Regime Registry Integration] Save detected macro regime to cache
             try:
-                from core.regime.registry import save_market_regime
-                save_market_regime(r_code, {
+                from core.regime.registry import save_macro_regime
+                save_macro_regime(r_code, {
                     "regime": regime,
                     "adx": 20.0,
                     "hurst": 0.50,
@@ -790,9 +808,9 @@ def get_latest_regime_and_reflection(region: str) -> tuple:
             macro_report = "（無可用宏觀經濟分析資料，預設為多頭情境）"
         
         # Extract regime
-        regime_match = re.search(r"\[MARKET_REGIME:\s*(BULL_RISK_ON|BEAR_RISK_OFF|VOLATILE_RANGEBOUND)\]", macro_report)
-        market_regime = regime_match.group(1) if regime_match else "BULL_RISK_ON"
-        macro_report_cleaned = re.sub(r"\[MARKET_REGIME:\s*(BULL_REGIME|BULL_RISK_ON|BEAR_RISK_OFF|VOLATILE_RANGEBOUND)\]\s*", "", macro_report)
+        regime_match = re.search(r"\[MACRO_REGIME:\s*(BULL_RISK_ON|BEAR_RISK_OFF|VOLATILE_RANGEBOUND)\]", macro_report)
+        macro_regime = regime_match.group(1) if regime_match else "BULL_RISK_ON"
+        macro_report_cleaned = re.sub(r"\[MACRO_REGIME:\s*(BULL_REGIME|BULL_RISK_ON|BEAR_RISK_OFF|VOLATILE_RANGEBOUND)\]\s*", "", macro_report)
         
         # 2. Fetch latest ReflectionAgent log for this region
         db.execute_sql(cursor,
@@ -810,7 +828,7 @@ def get_latest_regime_and_reflection(region: str) -> tuple:
         else:
             reflection_directives = "（本區域目前尚無歷史交易紀錄，暫無自我反思修正指令。請採用標準安全邊際進行基本面估值。）"
         
-        return macro_report_cleaned, market_regime, reflection_directives
+        return macro_report_cleaned, macro_regime, reflection_directives
 
 def run_realtime_query(query_str: str, track_option: bool, report_date: str):
     """
@@ -833,20 +851,20 @@ def run_realtime_query(query_str: str, track_option: bool, report_date: str):
     print_success(f"成功解析！標準代碼: {ticker} | 市場區域: {region_code} | 公司名稱: {display_name}")
     
     print_info("正在自資料庫加載最新宏觀經濟情境與歷史反思指令...")
-    macro_report, market_regime, reflection_directives = get_latest_regime_and_reflection(region_code)
-    print_success(f"當前大盤市場情境標籤：{market_regime}")
+    macro_report, macro_regime, reflection_directives = get_latest_regime_and_reflection(region_code)
+    print_success(f"當前大盤市場情境標籤：{macro_regime}")
     
     res = research_and_track_asset(
         ticker=ticker,
         company_name=display_name,
         region_code=region_code,
-        market_regime=market_regime,
+        macro_regime=macro_regime,
         macro_report=macro_report,
         reflection_directives=reflection_directives,
         report_date=report_date,
         save_to_db=track_option,
         is_weekly_pipeline=False,
-        custom_recommend_reason=f"Aegis-MAQS 即時查詢注入追蹤。當前市場情境: {market_regime}。"
+        custom_recommend_reason=f"Aegis-MAQS 即時查詢注入追蹤。當前市場情境: {macro_regime}。"
     )
     
     if not res:

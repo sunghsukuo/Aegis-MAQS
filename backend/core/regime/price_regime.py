@@ -62,7 +62,7 @@ def calculate_adx(high, low, close, period=14) -> float:
     return float(adx.iloc[-1]) if not pd.isna(adx.iloc[-1]) else 20.0
 
 
-def detect_market_regime(region_code: str) -> dict:
+def detect(region_code: str) -> dict:
     """
     Determines if the regional market is currently in a MOMENTUM_TREND or MEAN_REVERSION_RANGE regime.
     """

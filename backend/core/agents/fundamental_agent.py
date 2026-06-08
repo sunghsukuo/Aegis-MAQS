@@ -22,22 +22,22 @@ class FundamentalAgent(BaseAgent):
             system_instruction=SYSTEM_INSTRUCTION
         )
 
-    def analyze(self, ticker: str, company_name: str, financials: dict, news_analysis: str, macro_context: str, market_regime: str = None) -> str:
+    def analyze(self, ticker: str, company_name: str, financials: dict, news_analysis: str, macro_context: str, macro_regime: str = None) -> str:
         """Executes the fundamental valuation and investment recommendation for an asset, automatically routing between stock and ETF templates."""
         import math
         
         regime_instruction = ""
-        if market_regime == "BULL_RISK_ON":
+        if macro_regime == "BULL_RISK_ON":
             regime_instruction = """
 【重要大盤情境性格引導 (BULL_RISK_ON)】：
 目前大盤處於牛市積極進攻狀態（BULL_RISK_ON）。在評估標的時，請將分析焦點優先放在高成長性與獲利指標上。對於公司因研發、業務擴張而產生的短期股權稀釋或合理範圍內的債務，可給予適度寬容，著重發掘長線獲利爆發力。
 """
-        elif market_regime == "BEAR_RISK_OFF":
+        elif macro_regime == "BEAR_RISK_OFF":
             regime_instruction = """
 【重要大盤情境性格引導 (BEAR_RISK_OFF)】：
 目前大盤處於熊市保守避險狀態（BEAR_RISK_OFF）。在評估標的時，市場避險情緒高漲，請以極度嚴苛的視角審視任何潛在財務與消息風險。高度關注股權稀釋、負債比率與現金流健康度，若有任何瑕疵或不確定性，請果斷調降評級（如 Hold 或 Sell），切忌盲目樂觀。
 """
-        elif market_regime == "VOLATILE_RANGEBOUND":
+        elif macro_regime == "VOLATILE_RANGEBOUND":
             regime_instruction = """
 【重要大盤情境性格引導 (VOLATILE_RANGEBOUND)】：
 目前大盤處於震盪防守狀態（VOLATILE_RANGEBOUND）。此時市場缺乏明確方向，請保持平衡與中立。著重評估標的的估值安全邊際（如 PEG、P/E 水平）與防禦屬性，避免推薦波動度過高或基本面空泛的投機標的。
@@ -71,7 +71,7 @@ class FundamentalAgent(BaseAgent):
         
         # Calculate dynamic volatility stops based on Beta-adjusted ATR via risk manager
         from core.risk.risk_manager import calculate_risk_boundaries
-        risk_res = calculate_risk_boundaries(curr_price, atr_14, beta, market_regime=market_regime)
+        risk_res = calculate_risk_boundaries(curr_price, atr_14, beta, macro_regime=macro_regime)
         
         k1 = risk_res["k1"]
         k2 = risk_res["k2"]
@@ -82,8 +82,8 @@ class FundamentalAgent(BaseAgent):
         beta_adj = risk_res["beta_adj"]
 
         # In addition to standard macro regimes, check if we need to load the anti-chasing prompt snippet
-        regime_upper = (market_regime or "").upper()
-        if "REVERSION" in regime_upper or "RANGEBOUND" in regime_upper or market_regime == "VOLATILE_RANGEBOUND":
+        regime_upper = (macro_regime or "").upper()
+        if "REVERSION" in regime_upper or "RANGEBOUND" in regime_upper or macro_regime == "VOLATILE_RANGEBOUND":
             rsi_val = financials.get("rsi_14")
             sma_50 = financials.get("fifty_day_sma")
             bias_str = ""

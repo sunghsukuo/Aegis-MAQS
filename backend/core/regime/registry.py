@@ -2,11 +2,11 @@ import json
 from pathlib import Path
 from core.config import CACHE_DIR
 
-REGIME_CACHE_FILE = CACHE_DIR / "market_regime.json"
+REGIME_CACHE_FILE = CACHE_DIR / "macro_regime.json"
 
-def save_market_regime(region_code: str, regime_info: dict):
+def save_macro_regime(region_code: str, regime_info: dict):
     """
-    Saves the detected market regime info for a region into the cache file.
+    Saves the detected macro regime info for a region into the cache file.
     """
     data = {}
     if REGIME_CACHE_FILE.exists():
@@ -22,13 +22,13 @@ def save_market_regime(region_code: str, regime_info: dict):
         with open(REGIME_CACHE_FILE, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
     except Exception as e:
-        print(f"[!] Warning: Failed to write market regime cache: {e}")
+        print(f"[!] Warning: Failed to write macro regime cache: {e}")
 
 
-def get_market_regime(region_code: str) -> dict:
+def get_macro_regime(region_code: str) -> dict:
     """
-    Retrieves the cached market regime for a region.
-    Defaults to MOMENTUM_TREND if not cached or failed.
+    Retrieves the cached macro regime for a region.
+    Defaults to VOLATILE_RANGEBOUND if not cached or failed.
     """
     if REGIME_CACHE_FILE.exists():
         try:
