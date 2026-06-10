@@ -183,7 +183,7 @@ def fetch_rss_news(feed_url: str, max_items: int = 8, max_age_days: int = 14) ->
                 "pub_date": pub_date.strip() if pub_date else "N/A",
                 "summary": clean_summary[:400]  # Expanded to 400 characters for richer context
             })
-            
+      
         # If strict filtering left us with 0 articles, retry with a slightly wider buffer (max 30 days) to prevent blank pages
         if not articles and max_age_days < 30:
             return fetch_rss_news(feed_url, max_items, max_age_days=30)
@@ -227,7 +227,11 @@ def get_macro_news(region_code: str, max_items: int = 5) -> list:
         return search_news(query, max_items, language="en-US", region="US")
     elif region_code == "Taiwan":
         # Search for major Taiwan economic events
-        query = "台灣 總體經濟 出口 央行 景氣燈號 when:7d"
+        #query = "台灣 總體經濟 出口 央行 景氣燈號 when:7d"
+        query = """(台灣 OR 台 OR 主計處 OR 國發會 OR 台灣央行) 
+                    (intitle:"總體經濟" OR intitle:"總經" OR intitle:"景氣燈號" OR intitle:"經濟成長率" 
+                    OR intitle:"GDP" OR intitle:"CPI" OR intitle:"通膨" OR intitle:"升息" OR intitle:"降息") 
+                    -intitle:"美股" -intitle:"個股" -intitle:"聯準會" -intitle:"陸股" -intitle:"非農 when:7d"""
         return search_news(query, max_items, language="zh-TW", region="TW")
     else:
         query = f"{region_code} macroeconomic financial news"

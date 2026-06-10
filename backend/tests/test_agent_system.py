@@ -52,14 +52,16 @@ def test_web_search():
         # Test macro news
         tw_news = search_tool.get_macro_news("Taiwan", max_items=2)
         if tw_news:
-            print_green(f"台股總經新聞讀取成功！首條新聞：{tw_news[0]['title']}")
+            for news in tw_news:
+                print_green(f"台股總經新聞讀取成功！首條新聞：{news['title']}")
         else:
             print_yellow("台股總經新聞為空，請確認網路連線是否正常。")
             
         # Test stock news
         nvda_news = search_tool.get_stock_news("NVDA", max_items=2)
         if nvda_news:
-            print_green(f"個股新聞催化劑讀取成功！首條新聞：{nvda_news[0]['title']}")
+            for news in nvda_news:
+                print_green(f"個股新聞催化劑讀取成功！首條新聞：{news['title']}")
         else:
             print_yellow("個股新聞讀取為空。")
             

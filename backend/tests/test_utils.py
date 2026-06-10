@@ -74,7 +74,7 @@ class TestRegime(unittest.TestCase):
 
     @patch("yfinance.Ticker")
     def test_price_regime_detect(self, mock_ticker):
-        from core.regime.price_regime import detect
+        from core.regime.price_regime import detect_region
         import pandas as pd
         
         # Mock historical data: 60 trading days of trending data
@@ -85,7 +85,7 @@ class TestRegime(unittest.TestCase):
         })
         mock_ticker.return_value.history.return_value = mock_hist
         
-        res = detect("US")
+        res = detect_region("US")
         self.assertIn("regime", res)
         self.assertIn("adx", res)
         self.assertIn("hurst", res)

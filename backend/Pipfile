@@ -17,6 +17,8 @@ jinja2 = "*"
 pymysql = "*"
 cryptography = "*"
 googlenewsdecoder = "*"
+jupyter = "*"
+jupyterlab = "*"
 
 [dev-packages]
 pytest = "*"

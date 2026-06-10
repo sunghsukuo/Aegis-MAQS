@@ -62,17 +62,12 @@ def calculate_adx(high, low, close, period=14) -> float:
     return float(adx.iloc[-1]) if not pd.isna(adx.iloc[-1]) else 20.0
 
 
-def detect(region_code: str) -> dict:
+def detect_ticker(ticker: str) -> dict:
     """
-    Determines if the regional market is currently in a MOMENTUM_TREND or MEAN_REVERSION_RANGE regime.
+    Determines if the ticker is currently in a MOMENTUM_TREND or MEAN_REVERSION_RANGE regime.
     """
-    region_info = REGIONS.get(region_code)
-    if not region_info:
-        return {"regime": "MOMENTUM_TREND", "adx": 20.0, "hurst": 0.50}
-        
-    benchmark_ticker = region_info["benchmark"]
     try:
-        t = yf.Ticker(benchmark_ticker)
+        t = yf.Ticker(ticker)
         # Fetch 60 trading days (approx 3 months)
         hist = t.history(period="60d").dropna(subset=["Close"])
         if hist.empty or len(hist) < 30:
@@ -100,8 +95,19 @@ def detect(region_code: str) -> dict:
             "regime": regime,
             "adx": adx_val,
             "hurst": hurst_val,
-            "ticker": benchmark_ticker
+            "ticker": ticker
         }
     except Exception as e:
-        print(f"[!] Error detecting market regime for {region_code}: {e}")
+        print(f"[!] Error detecting price regime for {ticker}: {e}")
         return {"regime": "MOMENTUM_TREND", "adx": 20.0, "hurst": 0.50}
+
+def detect_region(region_code: str) -> dict:
+    """
+    Determines if the regional market is currently in a MOMENTUM_TREND or MEAN_REVERSION_RANGE regime.
+    """
+    region_info = REGIONS.get(region_code)
+    if not region_info:
+        return {"regime": "MOMENTUM_TREND", "adx": 20.0, "hurst": 0.50}
+        
+    return detect_ticker( region_info["benchmark"] )
+    

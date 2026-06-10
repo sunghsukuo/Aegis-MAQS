@@ -321,7 +321,7 @@ def run_regional_analysis(region_code: str, report_date: str, reflection_directi
     macro_report, macro_regime = analyze_macro_regime(region_code)
     
     # Detect price regime (quantitative ADX/Hurst) for screener strategy routing
-    from core.regime.price_regime import detect as detect_price_regime
+    from core.regime.price_regime import detect_region as detect_price_regime
     price_info = detect_price_regime(region_code)
     price_regime = price_info.get("regime", "MOMENTUM_TREND")
     print_info(f"[{region_name}] 偵測到價格氣候 (Price Regime): {price_regime} (ADX={price_info.get('adx', 'N/A'):.1f}, Hurst={price_info.get('hurst', 'N/A'):.2f})")
