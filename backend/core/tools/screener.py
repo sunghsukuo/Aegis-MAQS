@@ -9,6 +9,9 @@ class QuantScreener:
         # Clear the shared session history on initialization to start fresh
         ScreenerFactory.get_screener().clear_history()
 
+    def clear_history(self):
+        ScreenerFactory.get_screener().clear_history()
+
     @property
     def session_history(self):
         return ScreenerFactory.get_screener().session_history

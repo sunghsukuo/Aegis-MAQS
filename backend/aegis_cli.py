@@ -21,6 +21,18 @@ def main():
     parser.add_argument("--regions", nargs="+", default=["US", "Taiwan"], help="指定要分析的國家區域，例如 US Taiwan")
     parser.add_argument("--date", default=datetime.now().strftime("%Y-%m-%d"), help="指定週報產出日期 (YYYY-MM-DD)")
     parser.add_argument("--force", action="store_true", help="強制重新執行並覆蓋當日已有的報告")
+    parser.add_argument("--phase", type=str, choices=[
+        "portfolio_check",
+        "portfolio_reflect",
+        "analyze_macro",
+        "analyze_sectors",
+        "screen_targets",
+        "analyze_stocks",
+        "weekly_report",
+        "screener_report",
+        "notify",
+        "prompt_evolve"
+    ], help="指定要執行的單一管線步驟")
     parser.add_argument("--test-prompt-evolution", action="store_true", help="測試自適應 Prompt 演化引擎（注入模擬交易數據進行演化測試）")
     parser.add_argument("--query", type=str, help="即時個股分析與操作建議查詢 (支援個股代號或中文名稱，如 '2330.TW'、'鴻海')")
     parser.add_argument("--track", action="store_true", help="與 --query 搭配使用，若推薦評級為 Buy/Strong Buy，自動將該標的納入實戰持股追蹤與每日風控哨兵對帳")

@@ -14,11 +14,16 @@ class ReversionScreener(BaseScreener):
         if not tickers:
             return []
             
-        print(f"[*] [ReversionScreener] 開始對 {etf_ticker} 的成分股進行均值回歸拉回因子篩選...")
+        print(f"\033[96m[*]\033[0m [ReversionScreener] 開始對 {etf_ticker} 的成分股進行均值回歸拉回因子篩選...")
         screened_results = []
         
         min_mcap = 2 * 10**9 if region == "US" else 8 * 10**9
         min_vol = 200000 if region == "US" else 300000
+        
+        failed_liquidity = 0
+        failed_downtrend = 0
+        failed_overextended = 0
+        failed_overbought = 0
         
         for ticker in tickers:
             try:
@@ -26,6 +31,7 @@ class ReversionScreener(BaseScreener):
                 # Pull 1 year history to get 200-day moving average and 14-day RSI
                 hist = t.history(period="1y").dropna(subset=["Close"])
                 if hist.empty or len(hist) < 200:
+                    failed_liquidity += 1
                     continue
                 
                 fast = t.fast_info
@@ -36,6 +42,7 @@ class ReversionScreener(BaseScreener):
                 # 1. Liquidity filter
                 avg_volume = hist["Volume"].iloc[-20:].mean()
                 if market_cap < min_mcap or avg_volume < min_vol:
+                    failed_liquidity += 1
                     continue
                     
                 close_now = hist["Close"].iloc[-1]
@@ -43,14 +50,14 @@ class ReversionScreener(BaseScreener):
                 # 2. No Catching Falling Knives (Long-term uptrend check: Price must be above 200MA)
                 ma200 = hist["Close"].iloc[-200:].mean()
                 if close_now < ma200:
-                    # Stock is in a long-term downtrend, skip
+                    failed_downtrend += 1
                     continue
                     
                 # 3. Pullback check (Short-term support check: 50MA)
                 ma50 = hist["Close"].iloc[-50:].mean()
-                # We want the stock to be close to the 50MA support line (e.g. within -2% to +5% range)
                 dist_to_ma50 = (close_now - ma50) / ma50
                 if dist_to_ma50 < -0.05 or dist_to_ma50 > 0.08:
+                    failed_overextended += 1
                     continue
                     
                 # 4. Calculate RSI-14
@@ -66,6 +73,7 @@ class ReversionScreener(BaseScreener):
                 
                 # We want oversold/neutral-low conditions (RSI should ideally be < 50 for pullbacks)
                 if rsi_14 > 55:
+                    failed_overbought += 1
                     continue
                 
                 # 5. Pullback Depth (5-day return)
@@ -91,13 +99,9 @@ class ReversionScreener(BaseScreener):
                         name = f"{db_name} ({name})"
                 
                 # 7. Pullback & Mean Reversion Scoring
-                # - Pullback depth score (lower weekly return is better)
                 pullback_score = max(0, -weekly_return * 100)
-                
-                # - RSI score (lower RSI is better, e.g. RSI 30 gets higher score than RSI 50)
                 rsi_score = max(0, (100 - rsi_14)) / 100.0 * 10.0
                 
-                # - Support proximity bonus (close to 50MA)
                 if 0.0 <= dist_to_ma50 <= 0.04:
                     support_bonus = 5.0
                 elif -0.03 <= dist_to_ma50 < 0.0:
@@ -105,9 +109,7 @@ class ReversionScreener(BaseScreener):
                 else:
                     support_bonus = 0.0
                     
-                # - Volume score (we like slight volume support or consolidation)
                 volume_score = min(volume_spike, 2.0) / 2.0 * 3.0
-                
                 combined_score = pullback_score + rsi_score + support_bonus + volume_score
                 
                 screened_results.append({
@@ -125,7 +127,7 @@ class ReversionScreener(BaseScreener):
         screened_results.sort(key=lambda x: x["score"], reverse=True)
         final_picks = screened_results[:limit]
         
-        print(f"[✓] [ReversionScreener] {etf_ticker} 均值回歸選股完成！挑選出前 {len(final_picks)} 拉回優質股：")
+        print(f"\033[93m[✓]\033[0m [ReversionScreener] {etf_ticker} 均值回歸選股完成！挑選出前 {len(final_picks)} 拉回優質股：")
         for i, pick in enumerate(final_picks, 1):
             print(f"    {i}. {pick['name']} ({pick['ticker']}) - 5日幅: {pick['weekly_return']*100:.2f}%, 量能增幅: {pick['volume_spike']:.2f}x, 評分: {pick['score']:.2f}")
             
@@ -139,11 +141,30 @@ class ReversionScreener(BaseScreener):
                 etf_weekly_return = float((etf_close_now - etf_close_5d_ago) / etf_close_5d_ago)
         except Exception as e:
             print(f"[!] 計算 ETF {etf_ticker} 自身週報酬率失敗: {e}")
+            
+        # Fetch name for display purposes if not in DB
+        etf_name = etf_ticker
+        try:
+            import core.db_manager as db
+            active_sec = db.get_active_sectors(region).get(etf_ticker)
+            if active_sec:
+                etf_name = active_sec["name"]
+        except Exception:
+            pass
 
         self.session_history.append({
             "etf": etf_ticker,
+            "name": etf_name,
             "region": region,
             "picks": final_picks,
-            "weekly_return": etf_weekly_return
+            "weekly_return": etf_weekly_return,
+            "strategy": "reversion",
+            "stats": {
+                "total": len(tickers),
+                "failed_liquidity": failed_liquidity,
+                "failed_downtrend": failed_downtrend,
+                "failed_overextended": failed_overextended,
+                "failed_overbought": failed_overbought
+            }
         })
         return final_picks

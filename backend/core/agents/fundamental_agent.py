@@ -22,7 +22,7 @@ class FundamentalAgent(BaseAgent):
             system_instruction=SYSTEM_INSTRUCTION
         )
 
-    def analyze(self, ticker: str, company_name: str, financials: dict, news_analysis: str, macro_context: str, macro_regime: str = None) -> str:
+    def analyze(self, ticker: str, company_name: str, financials: dict, news_analysis: str, macro_context: str, macro_regime: str = None, price_regime: str = None) -> str:
         """Executes the fundamental valuation and investment recommendation for an asset, automatically routing between stock and ETF templates."""
         import math
         
@@ -81,9 +81,8 @@ class FundamentalAgent(BaseAgent):
         suggested_buy_upper = risk_res["suggested_buy_upper"]
         beta_adj = risk_res["beta_adj"]
 
-        # In addition to standard macro regimes, check if we need to load the anti-chasing prompt snippet
-        regime_upper = (macro_regime or "").upper()
-        if "REVERSION" in regime_upper or "RANGEBOUND" in regime_upper or macro_regime == "VOLATILE_RANGEBOUND":
+        # Trigger anti-chasing mechanism when the price regime indicates mean reversion/rangebound
+        if price_regime == "MEAN_REVERSION_RANGE":
             rsi_val = financials.get("rsi_14")
             sma_50 = financials.get("fifty_day_sma")
             bias_str = ""

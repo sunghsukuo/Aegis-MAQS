@@ -71,12 +71,18 @@ def main():
     print("🔍 Aegis-MAQS 動態最大回撤 (MDD) 警戒線計算詳情與因子排查")
     print("==================================================")
     
-    # 1. Fetch Global parameters
+    # 1. Fetch Regional parameters
     try:
-        meso = detect_meso_regime()
-        vix_scale = meso.get('vix_scale', 1.0)
+        twd_meso = detect_meso_regime("Taiwan")
+        twd_vix_scale = twd_meso.get('vix_scale', 1.0)
     except Exception:
-        vix_scale = 1.0
+        twd_vix_scale = 1.0
+        
+    try:
+        usd_meso = detect_meso_regime("US")
+        usd_vix_scale = usd_meso.get('vix_scale', 1.0)
+    except Exception:
+        usd_vix_scale = 1.0
         
     print(f"⚙️ 系統全域基準與乘數配置：")
     print(f"  • 台股基礎警戒額度 (DEFAULT_TWD_MDD_LIMIT): {DEFAULT_TWD_MDD_LIMIT*100:.2f}%")
@@ -84,7 +90,8 @@ def main():
     print(f"  • 牛市警戒乘數 (BULL_MDD_MULTIPLIER): {BULL_MDD_MULTIPLIER}")
     print(f"  • 熊市警戒乘數 (BEAR_MDD_MULTIPLIER): {BEAR_MDD_MULTIPLIER}")
     print(f"  • 震盪警戒乘數 (RANGEBOUND_MDD_MULTIPLIER): {RANGEBOUND_MDD_MULTIPLIER}")
-    print(f"  • 當前 VIX 波動調整係數 (vix_scale): {vix_scale:.4f}")
+    print(f"  • 台股波動調整係數 (twd_vix_scale): {twd_vix_scale:.4f} (由 TAIEX 年化波動度換算)")
+    print(f"  • 美股波動調整係數 (usd_vix_scale): {usd_vix_scale:.4f} (由 CBOE VIX 換算)")
     
     # 2. TWD Pocket Details
     twd_r = get_macro_regime('Taiwan').get('regime', 'VOLATILE_RANGEBOUND')
@@ -102,7 +109,7 @@ def main():
     print(f"  • 3. Beta 敏感度調整: {DEFAULT_TWD_MDD_LIMIT * max(0.5, min(twd_beta, 2.0)) * 100:.4f}%")
     print(f"  • 4. 市場狀態與乘數: {twd_r} ➡️ 乘數 {twd_regime_multiplier}")
     print(f"  • 5. 乘數調整後限額: {DEFAULT_TWD_MDD_LIMIT * max(0.5, min(twd_beta, 2.0)) * twd_regime_multiplier * 100:.4f}%")
-    print(f"  • 6. VIX 波動調整 (乘以 vix_scale): {DEFAULT_TWD_MDD_LIMIT * max(0.5, min(twd_beta, 2.0)) * twd_regime_multiplier * vix_scale * 100:.4f}%")
+    print(f"  • 6. VIX 波動調整 (乘以 twd_vix_scale): {DEFAULT_TWD_MDD_LIMIT * max(0.5, min(twd_beta, 2.0)) * twd_regime_multiplier * twd_vix_scale * 100:.4f}%")
     twd_final = get_dynamic_mdd_limit(twd_r, 'TWD')
     print(f"  • 7. 邊界保護限制 [0.5% - 20%]: {twd_final*100:.2f}%")
     
@@ -129,7 +136,7 @@ def main():
     print(f"  • 3. Beta 敏感度調整: {DEFAULT_USD_MDD_LIMIT * max(0.5, min(usd_beta, 2.0)) * 100:.4f}%")
     print(f"  • 4. 市場狀態與乘數: {usd_r} ➡️ 乘數 {usd_regime_multiplier}")
     print(f"  • 5. 乘數調整後限額: {DEFAULT_USD_MDD_LIMIT * max(0.5, min(usd_beta, 2.0)) * usd_regime_multiplier * 100:.4f}%")
-    print(f"  • 6. VIX 波動調整 (乘以 vix_scale): {DEFAULT_USD_MDD_LIMIT * max(0.5, min(usd_beta, 2.0)) * usd_regime_multiplier * vix_scale * 100:.4f}%")
+    print(f"  • 6. VIX 波動調整 (乘以 usd_vix_scale): {DEFAULT_USD_MDD_LIMIT * max(0.5, min(usd_beta, 2.0)) * usd_regime_multiplier * usd_vix_scale * 100:.4f}%")
     usd_final = get_dynamic_mdd_limit(usd_r, 'USD')
     print(f"  • 7. 邊界保護限制 [0.5% - 20%]: {usd_final*100:.2f}%")
     

@@ -16,7 +16,7 @@ def format_markdown_for_terminal(text: str) -> str:
             # Strip styling from header content
             content = content.replace("*", "").replace("_", "")
             if level <= 3:
-                formatted_lines.append(f"\n\033[1;32m【 {content} 】\033[0m")
+                formatted_lines.append(f"\n\033[1;33m【 {content} 】\033[0m")
             else:
                 formatted_lines.append(f"\n\033[1;36m  {content}\033[0m")
             continue

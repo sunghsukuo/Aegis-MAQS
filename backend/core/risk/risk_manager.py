@@ -151,7 +151,8 @@ def get_dynamic_mdd_limit(macro_regime: str = None, currency: str = 'TWD') -> fl
     
     # Fetch VIX scale from multi-factor detector
     try:
-        meso_info = detect_meso_regime()
+        region_code = "US" if curr == "USD" else "Taiwan"
+        meso_info = detect_meso_regime(region_code=region_code)
         vix_scale = meso_info.get("vix_scale", 1.0)
     except Exception:
         vix_scale = 1.0

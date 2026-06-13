@@ -85,7 +85,7 @@ class BudgetAgent:
         # 獲取第二層 Meso Regime 與自適應板塊權重限制
         from core.regime.multi_factor import detect_meso_regime
         try:
-            meso_info = detect_meso_regime()
+            meso_info = detect_meso_regime(region_code=region)
             meso_regime = meso_info.get("regime", "BULL_GROWTH_ON")
         except Exception:
             meso_regime = "BULL_GROWTH_ON"

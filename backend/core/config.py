@@ -103,8 +103,8 @@ MAX_STOCKS_PER_REGION = 4   # Default to deep-dive top 4 representative stocks p
 
 # Dynamic Wind-Down / Drawdown Watchdog Settings
 DEFAULT_MDD_LIMIT = float(os.getenv("DEFAULT_MDD_LIMIT", "0.03"))
-DEFAULT_TWD_MDD_LIMIT = float(os.getenv("DEFAULT_TWD_MDD_LIMIT", "0.03"))        # Taiwan stock MDD default limit (3%)
-DEFAULT_USD_MDD_LIMIT = float(os.getenv("DEFAULT_USD_MDD_LIMIT", "0.06"))        # US stock MDD default limit (6%) due to no price limits
+DEFAULT_TWD_MDD_LIMIT = float(os.getenv("DEFAULT_TWD_MDD_LIMIT", "0.04"))        # Taiwan stock MDD default limit (3%)
+DEFAULT_USD_MDD_LIMIT = float(os.getenv("DEFAULT_USD_MDD_LIMIT", "0.08"))        # US stock MDD default limit (6%) due to no price limits
 
 # Regime-based MDD Warning Limit Multipliers (applied to DEFAULT_MDD_LIMIT)
 BULL_MDD_MULTIPLIER = float(os.getenv("BULL_MDD_MULTIPLIER", "1.50"))            # e.g. 0.03 * 1.50 = 0.045

@@ -49,7 +49,9 @@ class ReflectionAgent(BaseAgent):
         else:
             for i, rec in enumerate(historical_recs):
                 status_str = "追蹤中 (Active)" if rec.get('is_active') == 1 else "已結案 (Closed)"
-                roi_val = rec.get('performance', 0)
+                roi_val = rec.get('performance')
+                if roi_val is None:
+                    roi_val = 0.0
                 roi_str = f"+{roi_val*100:.2f}%" if roi_val >= 0 else f"{roi_val*100:.2f}%"
                 
                 formatted_recs += f"{i+1}. Ticker: {rec['ticker']} ({rec['company_name']})\n"
@@ -96,13 +98,13 @@ class ReflectionAgent(BaseAgent):
             agent_name = "FundamentalAgent"
             if report_date:
                 query_sqlite = """
-                    SELECT l.ticker, r.performance as roi, l.input_prompt, l.output_response, l.prompt_version
+                    SELECT l.ticker, r.performance as roi, l.input_prompt, l.output_response, l.prompt_version, r.macro_regime, r.price_regime
                     FROM agent_inference_logs l
                     JOIN recommendations r ON l.rec_id = r.id
                     WHERE r.report_date = ? AND l.agent_name = ?
                 """
                 query_mysql = """
-                    SELECT l.ticker, r.performance as roi, l.input_prompt, l.output_response, l.prompt_version
+                    SELECT l.ticker, r.performance as roi, l.input_prompt, l.output_response, l.prompt_version, r.macro_regime, r.price_regime
                     FROM agent_inference_logs l
                     INNER JOIN recommendations r ON l.rec_id = r.id
                     WHERE r.report_date = %s AND l.agent_name = %s
@@ -119,7 +121,9 @@ class ReflectionAgent(BaseAgent):
                                 "roi": r["roi"],
                                 "input_prompt": r["input_prompt"],
                                 "output_response": r["output_response"],
-                                "prompt_version": r["prompt_version"]
+                                "prompt_version": r["prompt_version"],
+                                "macro_regime": r.get("macro_regime", "N/A"),
+                                "price_regime": r.get("price_regime", "N/A")
                             })
                         else:
                             logs.append({
@@ -127,7 +131,9 @@ class ReflectionAgent(BaseAgent):
                                 "roi": r[1],
                                 "input_prompt": r[2],
                                 "output_response": r[3],
-                                "prompt_version": r[4]
+                                "prompt_version": r[4],
+                                "macro_regime": r[5],
+                                "price_regime": r[6]
                             })
                             
                 # 如果為空且開啟了 mock
@@ -157,7 +163,7 @@ class ReflectionAgent(BaseAgent):
                             "prompt_version": "v1.0.0"
                         })
             else:
-                logs = db.get_recent_inference_logs_with_roi(agent_name, limit=limit)
+                logs = db.get_extreme_inference_logs_with_roi(agent_name, limit_success=5, limit_failure=5)
                 
             # 2. 進行 cold start 防禦檢查 (Cold-Start Defense Check)
             if len(logs) < 2:
@@ -195,12 +201,17 @@ class ReflectionAgent(BaseAgent):
             success_cases = []
             failure_cases = []
             for log in logs:
+                roi_val = log.get("roi")
+                if roi_val is None:
+                    roi_val = 0.0
                 case_desc = {
                     "ticker": log["ticker"],
-                    "roi": f"{log['roi'] * 100:.2f}%",
+                    "roi": f"{roi_val * 100:.2f}%",
+                    "macro_regime": log.get("macro_regime", "N/A"),
+                    "price_regime": log.get("price_regime", "N/A"),
                     "recommendation_summary": extract_case_summary(log["output_response"])
                 }
-                roi = log["roi"] or 0.0
+                roi = roi_val
                 if roi > 0:
                     success_cases.append(case_desc)
                 else:

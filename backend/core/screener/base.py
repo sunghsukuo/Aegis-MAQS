@@ -22,35 +22,13 @@ class BaseScreener:
 
     def fetch_etf_constituents(self, etf_ticker: str) -> list:
         """
-        Dynamically fetches constituents of the given ETF from Yahoo Finance.
-        Falls back to database registry or high-quality pre-seeded cache if scraping fails.
+        Fetches constituents of the given ETF/sector code.
+        Prioritizes local database definition and local cache configurations as the primary source of truth.
+        Only falls back to scraping Yahoo Finance if no local definition exists (e.g. for new ETFs).
         """
         etf_ticker = etf_ticker.strip().upper()
-        try:
-            url = f"https://finance.yahoo.com/quote/{etf_ticker}/holdings/"
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-            }
-            resp = requests.get(url, headers=headers, timeout=8)
-            if resp.status_code == 200:
-                soup = BeautifulSoup(resp.content, "html.parser")
-                tickers = []
-                for a in soup.find_all("a", href=True):
-                    href = a["href"]
-                    if "/quote/" in href:
-                        parts = href.split("/quote/")
-                        if len(parts) > 1:
-                            sym = parts[1].split("?")[0].split("/")[0].strip().upper()
-                            if sym and sym != etf_ticker and all(c.isalnum() or c in ".-" for c in sym) and len(sym) <= 10:
-                                if sym not in tickers:
-                                    tickers.append(sym)
-                if len(tickers) >= 5:
-                    print(f"[*] [Screener] 動態成功抓取 {etf_ticker} 的 {len(tickers)} 檔成分股代號。")
-                    return tickers
-        except Exception as e:
-            print(f"[!] [Screener] 動態抓取 {etf_ticker} 成分股失敗 ({e})。將切換至資料庫/快取。")
-
-        # Fallback to DB
+        
+        # 1. First Source of Truth: Database
         try:
             import core.db_manager as db
             with db.db_session() as conn:
@@ -71,34 +49,78 @@ class BaseScreener:
                     rows = cursor.fetchall()
                     if rows:
                         db_constituents = [r["ticker"] if isinstance(r, dict) else (r[0] if isinstance(r, tuple) else r) for r in rows]
-                        print(f"[*] [Screener] 從資料庫載入 {etf_ticker} 成分股清單 (共 {len(db_constituents)} 檔標的)。")
+                        print(f"\033[96m[*]\033[0m [Screener] 從資料庫載入 {etf_ticker} 成分股清單 (共 {len(db_constituents)} 檔標的)。")
                         return db_constituents
         except Exception as db_ex:
-            print(f"[!] [Screener] 從資料庫載入 {etf_ticker} 成分股失敗 ({db_ex})。")
+            print(f"\033[93m[!]\033[0m [Screener] 從資料庫載入 {etf_ticker} 成分股失敗 ({db_ex})。")
 
-        # Fallback to local cache
+        # 2. Second Source of Truth: Local cache (pre-seeded from sectors_config.json)
         cache_list = ETF_CONSTITUENTS_CACHE.get(etf_ticker)
-        if cache_list is None:
-            resolved_key = None
-            custom_proxy_keys = ["2881.TW", "1301.TW"]
-            for key in custom_proxy_keys:
-                if key in ETF_CONSTITUENTS_CACHE and etf_ticker in ETF_CONSTITUENTS_CACHE[key]:
+        if cache_list is not None:
+            print(f"\033[96m[*]\033[0m [Screener] 載入 {etf_ticker} 成分股快取清單 (共 {len(cache_list)} 檔標的)。")
+            return cache_list
+            
+        # 3. Handle sector proxy mapping fallback
+        resolved_key = None
+        custom_proxy_keys = ["2881.TW", "1301.TW"]
+        for key in custom_proxy_keys:
+            if key in ETF_CONSTITUENTS_CACHE and etf_ticker in ETF_CONSTITUENTS_CACHE[key]:
+                resolved_key = key
+                break
+        if not resolved_key:
+            for key, val_list in ETF_CONSTITUENTS_CACHE.items():
+                if etf_ticker in val_list:
                     resolved_key = key
                     break
-            if not resolved_key:
-                for key, val_list in ETF_CONSTITUENTS_CACHE.items():
-                    if etf_ticker in val_list:
-                        resolved_key = key
-                        break
-            if resolved_key:
-                cache_list = ETF_CONSTITUENTS_CACHE[resolved_key]
-                print(f"[*] [Screener] 偵測到 {etf_ticker} 為板塊代理人，自動映射至 {resolved_key} 的成分股清單。")
-            else:
-                cache_list = [etf_ticker]
-                print(f"[!] [Screener] 無法自動映射 {etf_ticker} 的板塊。將其視為單一個股。")
-        else:
-            print(f"[*] [Screener] 載入 {etf_ticker} 成分股快取清單 (共 {len(cache_list)} 檔標的)。")
-        return cache_list
+        if resolved_key:
+            cache_list = ETF_CONSTITUENTS_CACHE[resolved_key]
+            print(f"\033[96m[*]\033[0m [Screener] 偵測到 {etf_ticker} 為板塊代理人，自動映射至 {resolved_key} 的成分股清單。")
+            return cache_list
+
+        # 4. Third Source of Truth (Fallback): Scrape Yahoo Finance for undefined/new ETFs
+        is_taiwan = (etf_ticker.endswith(".TW") or etf_ticker.endswith(".TWO"))
+        is_real_etf = True
+        if is_taiwan and not etf_ticker.startswith("00"):
+            is_real_etf = False
+            
+        if is_real_etf:
+            print(f"\033[96m[*]\033[0m [Screener] 本地無 {etf_ticker} 定義，嘗試從 Yahoo Finance 動態爬取成分股...")
+            try:
+                url = f"https://finance.yahoo.com/quote/{etf_ticker}/holdings/"
+                headers = {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+                }
+                resp = requests.get(url, headers=headers, timeout=8)
+                if resp.status_code == 200:
+                    soup = BeautifulSoup(resp.content, "html.parser")
+                    tickers = []
+                    for a in soup.find_all("a", href=True):
+                        href = a["href"]
+                        if "/quote/" in href:
+                            parts = href.split("/quote/")
+                            if len(parts) > 1:
+                                sym = parts[1].split("?")[0].split("/")[0].strip().upper()
+                                
+                                # Validate region to prevent cross-region bleeding
+                                if is_taiwan:
+                                    if not (sym.endswith(".TW") or sym.endswith(".TWO")):
+                                        continue
+                                else:
+                                    if sym.endswith(".TW") or sym.endswith(".TWO"):
+                                        continue
+                                        
+                                if sym and sym != etf_ticker and all(c.isalnum() or c in ".-" for c in sym) and len(sym) <= 10:
+                                    if sym not in tickers:
+                                        tickers.append(sym)
+                    if len(tickers) >= 5:
+                        print(f"\033[96m[*]\033[0m [Screener] 動態成功抓取 {etf_ticker} 的 {len(tickers)} 檔成分股代號。")
+                        return tickers
+            except Exception as e:
+                print(f"\033[93m[!]\033[0m [Screener] 動態抓取 {etf_ticker} 成分股失敗 ({e})。")
+                
+        # 5. Last resort fallback
+        print(f"\033[93m[!]\033[0m [Screener] 無法為 {etf_ticker} 載入任何成分股。將其視為單一個股。")
+        return [etf_ticker]
 
     def _get_projected_volume(self, hist: pd.DataFrame, region: str) -> float:
         """Projects intraday volume to full-day volume if the market is open."""
@@ -141,7 +163,7 @@ class BaseScreener:
                     projected = last_volume * (total_minutes / elapsed)
                     return float(projected)
         except Exception as e:
-            print(f"[!] [Screener] Volume projection error: {e}")
+            print(f"\033[93m[!]\033[0m [Screener] Volume projection error: {e}")
         return float(hist["Volume"].iloc[-1])
 
     def record_proxy_etf(self, etf_ticker: str, region: str, financials: dict = None, weekly_return: float = 0.0):
@@ -161,7 +183,7 @@ class BaseScreener:
             "financials": financials,
             "weekly_return": weekly_return
         })
-        print(f"[✓] [Screener] 已成功將 ETF 代理標的 {etf_ticker} 寫入選股報告記錄。")
+        print(f"\033[93m[✓]\033[0m [Screener] 已成功將 ETF 代理標的 {etf_ticker} 寫入選股報告記錄。")
 
     def screen_stocks(self, etf_ticker: str, region: str, limit: int = 5, macro_regime: str = None) -> list:
         """Abstract method to be implemented by subclass strategies."""
@@ -189,20 +211,73 @@ class BaseScreener:
         
         for item in self.session_history:
             etf = item["etf"]
+            etf_name = item.get("name", etf)
             region = item["region"]
             picks = item["picks"]
             is_proxy = item.get("is_proxy", False)
             weekly_return = item.get("weekly_return", 0.0) * 100
             
-            if not picks and not is_proxy:
-                continue
-                
             region_lbl = "美股" if region == "US" else "台股"
             if not is_zh:
                 region_lbl = "US Market" if region == "US" else "Taiwan Market"
                 
+            if not picks and not is_proxy:
+                strategy = item.get("strategy", "reversion")
+                stats = item.get("stats", {})
+                total = stats.get("total", 0)
+                
+                if is_zh:
+                    lines.append(f"\n### 🔍 焦點行業板塊 ETF：{etf_name} ({etf}) ({region_lbl}) - 本週報酬率: {weekly_return:+.2f}%\n")
+                    if strategy == "reversion":
+                        lines.append(
+                            f"> [!WARNING]\n"
+                            f"> **本板塊在此期選股中被排除**，原因在於所採用的「均值回歸 (Reversion) 拉回策略」過濾了所有成分股：\n"
+                            f"> - 成分股總數：{total} 檔\n"
+                            f"> - 未達流動性或市值門檻被過濾：{stats.get('failed_liquidity', 0)} 檔\n"
+                            f"> - 處於長期空頭走勢 (低於 200MA) 被過濾：{stats.get('failed_downtrend', 0)} 檔\n"
+                            f"> - 價格過度延伸 (未處於 50MA 附近支撐區) 被過濾：{stats.get('failed_overextended', 0)} 檔\n"
+                            f"> - 短期技術指標過熱 (RSI-14 > 55) 被過濾：{stats.get('failed_overbought', 0)} 檔\n"
+                            f"> \n"
+                            f"> *解讀：該板塊目前短線已過熱或處於長期空頭趨勢中，無拉回之安全均值回歸交易機會，基於風控考量予以排除。*\n"
+                        )
+                    else:
+                        lines.append(
+                            f"> [!WARNING]\n"
+                            f"> **本板塊在此期選股中被排除**，原因在於所採用的「趨勢動能 (Momentum) 策略」過濾了所有成分股：\n"
+                            f"> - 成分股總數：{total} 檔\n"
+                            f"> - 未達流動性或市值門檻被過濾：{stats.get('failed_liquidity', 0)} 檔\n"
+                            f"> - 短期趨勢偏弱 (低於 20MA) 被過濾：{stats.get('failed_trend', 0)} 檔\n"
+                            f"> \n"
+                            f"> *解讀：該板塊目前技術面仍偏弱，缺乏強勢買盤推升，基於順勢交易與防禦考量予以排除。*\n"
+                        )
+                else:
+                    lines.append(f"\n### 🔍 Focus Sector ETF: {etf_name} ({etf}) ({region_lbl}) - Weekly Return: {weekly_return:+.2f}%\n")
+                    if strategy == "reversion":
+                        lines.append(
+                            f"> [!WARNING]\n"
+                            f"> **This sector was omitted from the stock selection** because all its constituents failed the 'Pullback / Mean Reversion Strategy' filters:\n"
+                            f"> - Total Constituents: {total}\n"
+                            f"> - Filtered out by size/liquidity: {stats.get('failed_liquidity', 0)}\n"
+                            f"> - Filtered out by downtrend (below 200MA): {stats.get('failed_downtrend', 0)}\n"
+                            f"> - Filtered out by overextension (outside 50MA range): {stats.get('failed_overextended', 0)}\n"
+                            f"> - Filtered out by overbought conditions (RSI-14 > 55): {stats.get('failed_overbought', 0)}\n"
+                            f"> \n"
+                            f"> *Note: This sector is currently either overbought or in a long-term downtrend, presenting no safe pullback entry. Omitted for risk control.*\n"
+                        )
+                    else:
+                        lines.append(
+                            f"> [!WARNING]\n"
+                            f"> **This sector was omitted from the stock selection** because all its constituents failed the 'Trend-Following / Momentum Strategy' filters:\n"
+                            f"> - Total Constituents: {total}\n"
+                            f"> - Filtered out by size/liquidity: {stats.get('failed_liquidity', 0)}\n"
+                            f"> - Filtered out by weak trend (below 20MA): {stats.get('failed_trend', 0)}\n"
+                            f"> \n"
+                            f"> *Note: This sector is currently in a weak trend with lack of buyers. Omitted for defensive purposes.*\n"
+                        )
+                lines.append("\n---")
+                continue
+                
             if is_proxy:
-                etf_name = item.get("name", etf)
                 f_data = item.get("financials") or {}
                 
                 def f_val(key, suffix="", prefix="", divisor=1.0, fmt=".2f"):

@@ -19,9 +19,9 @@ sys.path.append(str(BACKEND_ROOT))
 load_dotenv(BACKEND_ROOT / ".env")
 
 # Color formatting
-GREEN = "\033[92m"
+GREEN = "\033[93m"
 RED = "\033[91m"
-BLUE = "\033[94m"
+BLUE = "\033[96m"
 RESET = "\033[0m"
 
 def patch():

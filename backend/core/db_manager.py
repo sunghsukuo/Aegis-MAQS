@@ -132,6 +132,8 @@ def init_db():
                     invested_amount DOUBLE DEFAULT 0.0,    -- Capital allocated for this stock
                     shares DOUBLE DEFAULT 0.0,             -- Total shares bought
                     pnl DOUBLE DEFAULT 0.0,                -- Realized/Unrealized P&L in currency
+                    macro_regime VARCHAR(50) DEFAULT NULL, -- Market macro environment tag
+                    price_regime VARCHAR(50) DEFAULT NULL, -- Market price behavior tag
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     INDEX idx_report_date (report_date),
                     INDEX idx_ticker (ticker)
@@ -157,6 +159,8 @@ def init_db():
                     invested_amount REAL DEFAULT 0.0,
                     shares REAL DEFAULT 0.0,
                     pnl REAL DEFAULT 0.0,
+                    macro_regime TEXT DEFAULT NULL,
+                    price_regime TEXT DEFAULT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
@@ -229,6 +233,12 @@ def init_db():
                 cursor.execute("ALTER TABLE recommendations ADD COLUMN pnl DOUBLE DEFAULT 0.0;")
                 print("[✓] MySQL recommendations table upgraded with capital tracking columns.")
             
+            cursor.execute("SHOW COLUMNS FROM recommendations LIKE 'macro_regime'")
+            if not cursor.fetchone():
+                cursor.execute("ALTER TABLE recommendations ADD COLUMN macro_regime VARCHAR(50) DEFAULT NULL;")
+                cursor.execute("ALTER TABLE recommendations ADD COLUMN price_regime VARCHAR(50) DEFAULT NULL;")
+                print("[✓] MySQL recommendations table upgraded with regime logging columns.")
+                
             cursor.execute("SHOW COLUMNS FROM capital_ledger LIKE 'risk_circuit_breaker'")
             if not cursor.fetchone():
                 cursor.execute("ALTER TABLE capital_ledger ADD COLUMN risk_circuit_breaker TINYINT DEFAULT 0;")
@@ -241,6 +251,11 @@ def init_db():
                 cursor.execute("ALTER TABLE recommendations ADD COLUMN shares REAL DEFAULT 0.0;")
                 cursor.execute("ALTER TABLE recommendations ADD COLUMN pnl REAL DEFAULT 0.0;")
                 print("[✓] SQLite recommendations table upgraded with capital tracking columns.")
+                
+            if "macro_regime" not in cols:
+                cursor.execute("ALTER TABLE recommendations ADD COLUMN macro_regime TEXT DEFAULT NULL;")
+                cursor.execute("ALTER TABLE recommendations ADD COLUMN price_regime TEXT DEFAULT NULL;")
+                print("[✓] SQLite recommendations table upgraded with regime logging columns.")
             
             cursor.execute("PRAGMA table_info(capital_ledger)")
             ledger_cols = [row[1] for row in cursor.fetchall()]
@@ -589,8 +604,10 @@ def list_all_reports():
 def save_recommendation(report_date: str, region: str, ticker: str, company_name: str,
                         recommend_price: float, recommend_reason: str,
                         target_price: float = None, stop_loss: float = None, rating: str = "Buy",
-                        invested_amount: float = 0.0, shares: float = 0.0) -> int:
+                        invested_amount: float = 0.0, shares: float = 0.0,
+                        macro_regime: str = None, price_regime: str = None) -> int:
     """Inserts a new stock recommendation for weekly tracking, returning the inserted row ID."""
+    is_act = 1 if shares > 0.0 else 0
     with db_session() as conn:
         cursor = conn.cursor()
         execute_sql(cursor,
@@ -599,36 +616,37 @@ def save_recommendation(report_date: str, region: str, ticker: str, company_name
             INSERT INTO recommendations (
                 report_date, region, ticker, company_name, recommend_price,
                 recommend_reason, target_price, stop_loss, rating, is_active,
-                invested_amount, shares, pnl
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, 0.0)
+                invested_amount, shares, pnl, macro_regime, price_regime
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0.0, ?, ?)
             """,
             # MySQL:
             """
             INSERT INTO recommendations (
                 report_date, region, ticker, company_name, recommend_price,
                 recommend_reason, target_price, stop_loss, rating, is_active,
-                invested_amount, shares, pnl
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 1, %s, %s, 0.0)
+                invested_amount, shares, pnl, macro_regime, price_regime
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 0.0, %s, %s)
             """,
             (report_date, region, ticker.upper(), company_name, recommend_price,
-             recommend_reason, target_price, stop_loss, rating, invested_amount, shares)
+             recommend_reason, target_price, stop_loss, rating, is_act, invested_amount, shares,
+             macro_regime, price_regime)
         )
         return cursor.lastrowid
 
 def get_active_recommendations(region: str = None):
-    """Fetches all recommendations currently active and needing price checks."""
+    """Fetches all recommendations currently active and needing price checks (actual holdings only)."""
     with db_session() as conn:
         cursor = conn.cursor()
         if region:
             execute_sql(cursor,
-                "SELECT * FROM recommendations WHERE is_active = 1 AND region = ?",
-                "SELECT * FROM recommendations WHERE is_active = 1 AND region = %s",
+                "SELECT * FROM recommendations WHERE is_active = 1 AND region = ? AND shares > 0",
+                "SELECT * FROM recommendations WHERE is_active = 1 AND region = %s AND shares > 0",
                 (region,)
             )
         else:
             execute_sql(cursor,
-                "SELECT * FROM recommendations WHERE is_active = 1",
-                "SELECT * FROM recommendations WHERE is_active = 1"
+                "SELECT * FROM recommendations WHERE is_active = 1 AND shares > 0",
+                "SELECT * FROM recommendations WHERE is_active = 1 AND shares > 0"
             )
         rows = cursor.fetchall()
         return [dict(row) for row in rows]
@@ -680,12 +698,12 @@ def update_recommendation_performance(rec_id: int, performance: float, pnl: floa
         )
 
 def get_historical_performance():
-    """Calculates high-level win rates and returns across all closed recommendations."""
+    """Calculates high-level win rates and returns across all closed recommendations (actual holdings only)."""
     with db_session() as conn:
         cursor = conn.cursor()
         execute_sql(cursor,
-            "SELECT * FROM recommendations WHERE is_active = 0",
-            "SELECT * FROM recommendations WHERE is_active = 0"
+            "SELECT * FROM recommendations WHERE is_active = 0 AND shares > 0",
+            "SELECT * FROM recommendations WHERE is_active = 0 AND shares > 0"
         )
         closed_recs = [dict(row) for row in cursor.fetchall()]
         
@@ -821,7 +839,7 @@ def get_recent_inference_logs_with_roi(agent_name: str, limit: int = 6) -> list:
     with db_session() as conn:
         cursor = conn.cursor()
         query_sqlite = """
-            SELECT l.ticker, r.performance as roi, l.input_prompt, l.output_response, l.prompt_version
+            SELECT l.ticker, r.performance as roi, l.input_prompt, l.output_response, l.prompt_version, r.macro_regime, r.price_regime
             FROM agent_inference_logs l
             JOIN recommendations r ON l.rec_id = r.id
             WHERE l.agent_name = ? AND r.performance IS NOT NULL
@@ -829,7 +847,7 @@ def get_recent_inference_logs_with_roi(agent_name: str, limit: int = 6) -> list:
             LIMIT ?
         """
         query_mysql = """
-            SELECT l.ticker, r.performance as roi, l.input_prompt, l.output_response, l.prompt_version
+            SELECT l.ticker, r.performance as roi, l.input_prompt, l.output_response, l.prompt_version, r.macro_regime, r.price_regime
             FROM agent_inference_logs l
             INNER JOIN recommendations r ON l.rec_id = r.id
             WHERE l.agent_name = %s AND r.performance IS NOT NULL
@@ -848,9 +866,61 @@ def get_recent_inference_logs_with_roi(agent_name: str, limit: int = 6) -> list:
                     "roi": r[1],
                     "input_prompt": r[2],
                     "output_response": r[3],
-                    "prompt_version": r[4]
+                    "prompt_version": r[4],
+                    "macro_regime": r[5],
+                    "price_regime": r[6]
                 })
         return results
+
+
+def get_extreme_inference_logs_with_roi(agent_name: str, limit_success: int = 5, limit_failure: int = 5) -> list:
+    """Fetches high-contrast historical trade logs (top performing and worst performing) from a sliding window of the last 30 closed recommendations."""
+    with db_session() as conn:
+        cursor = conn.cursor()
+        query_sqlite = """
+            SELECT l.ticker, r.performance as roi, l.input_prompt, l.output_response, l.prompt_version, r.macro_regime, r.price_regime
+            FROM agent_inference_logs l
+            JOIN recommendations r ON l.rec_id = r.id
+            WHERE l.agent_name = ? AND r.performance IS NOT NULL
+            ORDER BY r.id DESC
+            LIMIT 30
+        """
+        query_mysql = """
+            SELECT l.ticker, r.performance as roi, l.input_prompt, l.output_response, l.prompt_version, r.macro_regime, r.price_regime
+            FROM agent_inference_logs l
+            INNER JOIN recommendations r ON l.rec_id = r.id
+            WHERE l.agent_name = %s AND r.performance IS NOT NULL
+            ORDER BY r.id DESC
+            LIMIT 30
+        """
+        execute_sql(cursor, query_sqlite, query_mysql, (agent_name,))
+        rows = cursor.fetchall()
+        
+        parsed_rows = []
+        for r in rows:
+            if isinstance(r, dict):
+                parsed_rows.append(r)
+            else:
+                parsed_rows.append({
+                    "ticker": r[0],
+                    "roi": r[1],
+                    "input_prompt": r[2],
+                    "output_response": r[3],
+                    "prompt_version": r[4],
+                    "macro_regime": r[5],
+                    "price_regime": r[6]
+                })
+        
+        # Split into successes and failures
+        success_cases = [r for r in parsed_rows if (r["roi"] or 0.0) > 0.0]
+        failure_cases = [r for r in parsed_rows if (r["roi"] or 0.0) <= 0.0]
+        
+        # Sort in-memory to get absolute best and worst within the window
+        success_cases.sort(key=lambda x: x["roi"], reverse=True)
+        failure_cases.sort(key=lambda x: x["roi"], reverse=False)
+        
+        # Take the top N of each
+        return success_cases[:limit_success] + failure_cases[:limit_failure]
 
 
 def get_risk_circuit_breaker(currency: str) -> bool:
@@ -881,4 +951,88 @@ def update_risk_circuit_breaker(currency: str, state: int) -> None:
         query = "UPDATE capital_ledger SET risk_circuit_breaker = %s WHERE currency = %s" if DB_TYPE == "mysql" else "UPDATE capital_ledger SET risk_circuit_breaker = ? WHERE currency = ?"
         cursor.execute(query, (state, currency.upper()))
         conn.commit()
+
+
+def rollback_reports_and_recommendations(report_date: str) -> None:
+    """
+    Safely rolls back recommendations, transactions, inference logs, and reports 
+    for a specific report date. Restores cash balances for any BUY transactions 
+    associated with recommendations from that day to ensure database consistency.
+    """
+    with db_session() as conn:
+        cursor = conn.cursor()
+        
+        # 1. Get today's recommendation IDs
+        execute_sql(
+            cursor,
+            "SELECT id, ticker, shares, invested_amount, region FROM recommendations WHERE report_date = ?",
+            "SELECT id, ticker, shares, invested_amount, region FROM recommendations WHERE report_date = %s",
+            (report_date,)
+        )
+        recs = cursor.fetchall()
+        
+        rec_ids = []
+        if recs:
+            rec_ids = [r["id"] if isinstance(r, dict) else r[0] for r in recs]
+            
+        # 2. Get BUY transactions to refund
+        if rec_ids:
+            rec_ids_str = ",".join(map(str, rec_ids))
+            tx_query_sqlite = f"SELECT currency, amount FROM transaction_history WHERE action = 'BUY' AND rec_id IN ({rec_ids_str})"
+            execute_sql(cursor, tx_query_sqlite, tx_query_sqlite)
+            txs = cursor.fetchall()
+            
+            refunds = {"USD": 0.0, "TWD": 0.0}
+            for tx in txs:
+                curr = tx["currency"] if isinstance(tx, dict) else tx[0]
+                amt = tx["amount"] if isinstance(tx, dict) else tx[1]
+                refunds[curr] += amt
+                
+            # 3. Apply refunds to capital ledger
+            for curr, amt in refunds.items():
+                if amt > 0.0:
+                    execute_sql(
+                        cursor,
+                        "SELECT available_capital FROM capital_ledger WHERE currency = ?",
+                        "SELECT available_capital FROM capital_ledger WHERE currency = %s",
+                        (curr,)
+                    )
+                    row = cursor.fetchone()
+                    current_available = row["available_capital"] if isinstance(row, dict) else row[0]
+                    new_available = current_available + amt
+                    
+                    execute_sql(
+                        cursor,
+                        "UPDATE capital_ledger SET available_capital = ? WHERE currency = ?",
+                        "UPDATE capital_ledger SET available_capital = %s WHERE currency = %s",
+                        (new_available, curr)
+                    )
+                    print(f"[*] [DB Consistency] Refunded {amt:.2f} {curr} to capital ledger. New balance: {new_available:.2f}")
+                    
+            # 4. Delete transaction history
+            del_tx_sqlite = f"DELETE FROM transaction_history WHERE rec_id IN ({rec_ids_str})"
+            execute_sql(cursor, del_tx_sqlite, del_tx_sqlite)
+            
+            # 5. Delete agent inference logs
+            del_log_sqlite = f"DELETE FROM agent_inference_logs WHERE rec_id IN ({rec_ids_str})"
+            execute_sql(cursor, del_log_sqlite, del_log_sqlite)
+            
+            # 6. Delete recommendations
+            execute_sql(
+                cursor,
+                "DELETE FROM recommendations WHERE report_date = ?",
+                "DELETE FROM recommendations WHERE report_date = %s",
+                (report_date,)
+            )
+            print(f"[*] [DB Consistency] Purged recommendations and logs for {report_date}.")
+
+        # 7. Delete report metadata using LIKE
+        execute_sql(
+            cursor,
+            "DELETE FROM reports WHERE date LIKE ?",
+            "DELETE FROM reports WHERE date LIKE %s",
+            (f"{report_date}%",)
+        )
+        print(f"[*] [DB Consistency] Purged reports matching {report_date}% from DB.")
+
 

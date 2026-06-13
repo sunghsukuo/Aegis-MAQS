@@ -12,8 +12,8 @@ import core.db_manager as db
 import core.tools.yahoo_finance as yf_tool
 
 # Color outputs for CLI readability
-def print_success(msg): print(f"\033[92m[✓] {msg}\033[0m")
-def print_info(msg): print(f"\033[94m[*] {msg}\033[0m")
+def print_success(msg): print(f"\033[93m[✓] {msg}\033[0m")
+def print_info(msg): print(f"\033[96m[*] {msg}\033[0m")
 def print_warning(msg): print(f"\033[93m[!] {msg}\033[0m")
 def print_error(msg): print(f"\033[91m[✗] {msg}\033[0m")
 
@@ -292,6 +292,7 @@ def run_portfolio_check(report_date: str, regions: list = None):
                 mdd_limit = get_dynamic_mdd_limit(regime_name, curr)
 
                 
+                previously_triggered = db.get_risk_circuit_breaker(curr)
                 triggered = (current_mdd > mdd_limit) or (current_drop > mdd_limit)
                 
                 # Sync circuit breaker state in database
@@ -303,19 +304,36 @@ def run_portfolio_check(report_date: str, regions: list = None):
                         f"   - 當前 MDD: {current_mdd*100:.2f}% | 自峰值回落: {current_drop*100:.2f}% (動態警戒: {mdd_limit*100:.1f}%)\n"
                         f"   - 執行動作: 啟動熔斷，凍結新買單預算。"
                     )
-                    # Send LINE Warning message
-                    msg = (
-                        f"🚨 【風控警報·沙盒資產淨值與回撤警告】\n"
-                        f"================================\n"
-                        f"發送時間：{datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n"
-                        f"⚠️ 系統已偵測到風控指標突破動態警戒線！\n"
-                        f"• {region_filter} 歷史最大回撤 (MDD) 達 {current_mdd*100:.2f}% (動態警戒: {mdd_limit*100:.1f}%)\n"
-                        f"• {region_filter} 資產自峰值回降 達 {current_drop*100:.2f}% (動態警戒: {mdd_limit*100:.1f}%)\n\n"
-                        f"💰 當前資產淨值: {total_nav:,.2f} {curr}\n"
-                        f"🛑 【緊急處置與風控對策】\n"
-                        f"沙盒實戰期回撤已突破風險警戒！為保護本金安全，系統已自動執行熔斷機制，全面凍結新標的買入分配。🛡️"
-                    )
-                    notifier.send_message(msg)
+                    # Send LINE Warning message ONLY if it transitioned from Normal to Triggered
+                    if not previously_triggered:
+                        msg = (
+                            f"🚨 【風控警報·沙盒資產淨值與回撤警告】\n"
+                            f"================================\n"
+                            f"發送時間：{datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n"
+                            f"⚠️ 系統已偵測到風控指標突破動態警戒線！\n"
+                            f"• {region_filter} 歷史最大回撤 (MDD) 達 {current_mdd*100:.2f}% (動態警戒: {mdd_limit*100:.1f}%)\n"
+                            f"• {region_filter} 資產自峰值回降 達 {current_drop*100:.2f}% (動態警戒: {mdd_limit*100:.1f}%)\n\n"
+                            f"💰 當前資產淨值: {total_nav:,.2f} {curr}\n"
+                            f"🛑 【緊急處置與風控對策】\n"
+                            f"沙盒實戰期回撤已突破風險警戒！為保護本金安全，系統已自動執行熔斷機制，全面凍結新標的買入分配。🛡️"
+                        )
+                        notifier.send_message(msg)
+                else:
+                    # Send LINE Recovery message if it transitioned from Triggered to Normal
+                    if previously_triggered:
+                        print_success(f"✅ [風控恢復] {curr} 帳戶已回復至動態警戒線以下！")
+                        recovery_msg = (
+                            f"✅ 【風控解除·沙盒資產淨值與回撤已回復安全區間】\n"
+                            f"================================\n"
+                            f"發送時間：{datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n"
+                            f"🎉 系統已偵測到風控指標已回復至動態警戒線以下！\n"
+                            f"• {region_filter} 歷史最大回撤 (MDD) 降至 {current_mdd*100:.2f}% (動態警戒: {mdd_limit*100:.1f}%)\n"
+                            f"• {region_filter} 資產自峰值回降 降至 {current_drop*100:.2f}% (動態警戒: {mdd_limit*100:.1f}%)\n\n"
+                            f"💰 當前資產淨值: {total_nav:,.2f} {curr}\n"
+                            f"🛡️ 【風控恢復對策】\n"
+                            f"回撤指標已回復安全區間，系統已自動解除熔斷機制，恢復新標的的正常買入與資產分配能力。🟢"
+                        )
+                        notifier.send_message(recovery_msg)
             except Exception as cb_ex:
                 print_error(f"[!] 無法在對帳中進行風控熔斷檢查: {cb_ex}")
         print_success("==================================================")

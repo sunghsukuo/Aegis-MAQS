@@ -29,9 +29,9 @@ from core.agents.writer_agent import WriterAgent
 from core.tools.valuation_engine import ValuationEngine
 from core.utils.parsers import extract_price_from_line, extract_range_from_line
 
-def print_info(msg): print(f"\033[94m[*] {msg}\033[0m")
+def print_info(msg): print(f"\033[96m[*] {msg}\033[0m")
 def print_warning(msg): print(f"\033[93m[!] {msg}\033[0m")
-def print_success(msg): print(f"\033[92m[✓] {msg}\033[0m")
+def print_success(msg): print(f"\033[93m[✓] {msg}\033[0m")
 def print_error(msg): print(f"\033[91m[✗] {msg}\033[0m")
 
 
@@ -455,247 +455,103 @@ def run_report_pipeline(args, report_date, regions_list, timestamp_suffix, daily
     print_success("==================================================")
     print_success("🚀 歡迎使用：投資研究代理人自動化研報系統 (CLI)")
     print_success(f"執行日期：{report_date} | 目標市場：{', '.join(regions_list)}")
+    phase = getattr(args, "phase", None)
+    if phase:
+        print_success(f"執行單一階段：{phase}")
     print_success("==================================================")
     
-    # Check if a report for today already exists to prevent duplicate LLM calls
-    existing_report = db.get_report_by_date(report_date)
-    if existing_report and not args.force:
-        print_warning(f"偵測到資料庫中已存在【{report_date}】的投資報告。")
-        print_warning("使用 --force 參數可強制重新運行並覆蓋。")
-        sys.exit(0)
-        
-    # Step 1: Defensive pre-reflection price check & closing using our 0-token check_portfolio logic
-    try:
-        run_portfolio_check(report_date)
-        time.sleep(2)  # Cooldown
-    except Exception as e:
-        print_warning(f"全域持股前置對帳時發生輕微異常（將繼續使用現有資料庫資料進行反思）: {e}")
-        
-    # Retrieve the exact trading date range for this week's data to ensure algorithmic transparency
-    start_date_str = ""
-    end_date_str = ""
-    try:
-        us_bench = yf_tool.get_benchmark_performance("US")
-        start_date_str = us_bench.get("start_date", "")
-        end_date_str = us_bench.get("end_date", "")
-    except Exception as e:
-        print_warning(f"取得大盤本週計算區間失敗: {e}")
-
-    # Step 2: Execute macro, sector, news, and fundamental analysis FOR EACH region, and compile split reports
-    analyzed_successfully = 0
-    regional_regimes = {}
-    
-    for r_code in regions_list:
-        if r_code not in REGIONS:
-            print_error(f"不支援的國家區域：{r_code}，跳過。")
-            continue
-            
-        region_name = REGIONS[r_code]["name"]
-        print_info(f"\n==================================================")
-        print_info(f"📍 啟動國家/區域獨立分析：{region_name} ({r_code})")
-        print_info(f"==================================================")
-        
-        try:
-            # A. Run region-specific portfolio reflection and backtesting
-            try:
-                reflection_directives = run_regional_reflection(r_code, report_date)
-                time.sleep(3)  # Cooldown
-            except Exception as ex:
-                print_error(f"[{r_code}] 執行區域專屬自我反思時失敗: {ex}")
-                reflection_directives = "（本區域目前尚無歷史交易紀錄，暫無自我反思修正指令。請採用標準安全邊際進行基本面估值。）"
-                
-            # Run the analytical pipeline for this specific region
-            mac_rep, mkt_rep, stk_rep, regime = run_regional_analysis(r_code, report_date, reflection_directives)
-            regional_regimes[region_name] = regime
-            
-            # [Regime Registry Integration] Save detected macro regime to cache
-            try:
-                from core.regime.registry import save_macro_regime
-                save_macro_regime(r_code, {
-                    "regime": regime,
-                    "adx": 20.0,
-                    "hurst": 0.50,
-                    "ticker": "^GSPC" if r_code == "US" else "^TWII"
-                })
-                print_info(f"[{r_code}] 成功將總經市場情境標籤 {regime} 寫入快取。")
-            except Exception as reg_ex:
-                print_error(f"[{r_code}] 無法將市場情境寫入快取: {reg_ex}")
-
-            
-            # Step 3: Run Writer Agent (Chief Editor) to synthesize THIS region's report independently!
-            print_info(f"✍ 正在調度總編輯代理人 (WriterAgent) 進行【{region_name}】專用策略週報撰寫...")
-            writer_agent = WriterAgent()
-            time.sleep(3)  # Rate limit cool-down
-            
-            date_range_label = f"{report_date} (本週數據涵蓋區間: {start_date_str} 至 {end_date_str})" if start_date_str else report_date
-            
-            final_markdown = writer_agent.synthesize(
-                date_str=date_range_label,
-                macro_reports=[mac_rep],
-                market_reports=[mkt_rep],
-                stock_reports=[stk_rep],
-                reflection_report=reflection_directives
+    if not phase:
+        existing_report = db.get_report_by_date(report_date)
+        existing_recs_count = 0
+        with db.db_session() as conn:
+            cursor = conn.cursor()
+            db.execute_sql(
+                cursor,
+                "SELECT COUNT(*) FROM recommendations WHERE report_date = ?",
+                "SELECT COUNT(*) FROM recommendations WHERE report_date = %s",
+                (report_date,)
             )
-            print_info(f"[{region_name}] 總編輯生成的原始週報長度: {len(final_markdown)} 字元。")
+            row = cursor.fetchone()
+            if row:
+                existing_recs_count = row["COUNT(*)"] if isinstance(row, dict) else row[0]
+                
+        if (existing_report or existing_recs_count > 0) and not args.force:
+            print_warning(f"偵測到資料庫中已存在【{report_date}】的投資報告或推薦記錄。")
+            print_warning("使用 --force 參數可強制重新運行，系統將自動清理舊資料以確保資料庫一致性。")
+            sys.exit(0)
             
-            # [Prompt Evolution Integration] Log WriterAgent's inference
-            try:
-                db.save_agent_inference_log(
-                    rec_id=None,
-                    agent_name="WriterAgent",
-                    ticker=None,
-                    input_prompt=writer_agent.last_prompt,
-                    output_response=final_markdown,
-                    prompt_version=writer_agent.prompt_version
-                )
-            except Exception as log_ex:
-                print(f"[!] Warning: 記錄 WriterAgent 推論日誌失敗: {log_ex}")
-            
-            # Physically override the title to customize it per-region and force calculations date range
-            r_start_date = start_date_str
-            r_end_date = end_date_str
-            try:
-                r_bench = yf_tool.get_benchmark_performance(r_code)
-                r_start_date = r_bench.get("start_date", r_start_date)
-                r_end_date = r_bench.get("end_date", r_end_date)
-            except Exception:
-                pass
+        if args.force or existing_recs_count > 0 or existing_report:
+            print_info(f"正在自動清理與還原【{report_date}】的舊有報告與交易記錄，確保資料庫一致性...")
+            db.rollback_reports_and_recommendations(report_date)
+            from core.config import CACHE_DIR
+            state_file = CACHE_DIR / f"pipeline_state_{report_date}.json"
+            if state_file.exists():
+                try:
+                    state_file.unlink()
+                except Exception:
+                    pass
 
-            if r_start_date and r_end_date:
-                date_range_text = f"**Data Calculation Range: {r_start_date} to {r_end_date} (6 Trading Days, 5-Day Returns)**" if REPORT_LANGUAGE == "EN" else f"**本週數據涵蓋區間：{r_start_date} 至 {r_end_date}，共 6 個交易日 (計算 5 日累積收益)**"
-                
-                if REPORT_LANGUAGE == "EN":
-                    r_lbl = "US Market" if r_code == "US" else "Taiwan Market"
-                    region_title = f"# 🌍 Weekly {r_lbl} Investment Strategy & Multi-Agent Advisory Report {report_date}"
-                    final_markdown = final_markdown.replace(f"# 🌍 Weekly Global Investment Strategy & Multi-Agent Advisory Report {report_date}", region_title)
-                    # Safe fallback override
-                    if not final_markdown.startswith("#"):
-                        final_markdown = f"{region_title}\n{date_range_text}\n" + final_markdown
-                    else:
-                        lines = final_markdown.splitlines()
-                        final_markdown = f"{region_title}\n{date_range_text}\n" + "\n".join(lines[1:])
-                else:
-                    r_lbl = "美股" if r_code == "US" else "台股"
-                    region_title = f"# 🌍 每週{r_lbl}投資策略與多維度決策週報 {report_date}"
-                    final_markdown = final_markdown.replace(f"# 🌍 每週全球投資策略與多維度決策週報 {report_date}", region_title)
-                    # Safe fallback override
-                    if not final_markdown.startswith("#"):
-                        final_markdown = f"{region_title}\n{date_range_text}\n" + final_markdown
-                    else:
-                        lines = final_markdown.splitlines()
-                        final_markdown = f"{region_title}\n{date_range_text}\n" + "\n".join(lines[1:])
-            
-            # Convert synthesized Markdown to HTML
-            final_html = markdown.markdown(final_markdown, extensions=['fenced_code', 'tables'])
-            
-            # Archive and Save the regional report (Physical files + DB)
-            report_filename = f"{report_date}_{timestamp_suffix}_{r_code}_{REPORT_LANGUAGE}"
-            db.save_report(report_filename, [r_code], final_markdown, final_html)
-            
-            md_file_path = daily_reports_dir / f"{report_filename}.md"
-            html_file_path = daily_reports_dir / f"{report_filename}.html"
-            
-            with open(md_file_path, "w", encoding="utf-8") as f:
-                f.write(final_markdown)
-            with open(html_file_path, "w", encoding="utf-8") as f:
-                f.write(final_html)
-                
-            print_success(f"🎉 恭喜！【{region_name}】專區投資決策白皮書已成功產出並存檔！")
-            print_success(f"💾 Markdown 存檔路徑：{md_file_path}")
-            print_success(f"💾 HTML 存檔路徑：{html_file_path}")
-            analyzed_successfully += 1
-            
-        except Exception as e:
-            print_error(f"分析編撰區域 {r_code} 時發生嚴重錯誤: {e}")
+    state = load_pipeline_state(report_date)
+    init_pipeline_state_dates(state)
 
-    if analyzed_successfully == 0:
-        print_error("所有區域的分析及編撰均失敗。")
-        sys.exit(1)
-        
-    # Step 4: Generate a unified Stock Selection Screener Report!
-    print_info("\n==================================================")
-    print_info("📊 正在產出「量化動態選股掃描決策報告」...")
-    print_info("==================================================")
-    try:
-        screener = yf_tool.get_screener_instance()
-        screener_md, screener_html = screener.generate_report(report_date)
-        if screener_md:
-            screener_filename = f"{report_date}_{timestamp_suffix}_screener_report_{REPORT_LANGUAGE}"
-            db.save_report(screener_filename, regions_list, screener_md, screener_html)
+    phases_to_run = [
+        "portfolio_check",
+        "portfolio_reflect",
+        "analyze_macro",
+        "analyze_sectors",
+        "screen_targets",
+        "analyze_stocks",
+        "weekly_report",
+        "screener_report",
+        "notify",
+        "prompt_evolve"
+    ]
+    
+    if phase:
+        if phase not in phases_to_run:
+            print_error(f"無效的階段名稱：{phase}")
+            sys.exit(1)
+        active_phases = [phase]
+    else:
+        active_phases = phases_to_run
+
+    for p in active_phases:
+        if p == "portfolio_check":
+            run_portfolio_check_phase(report_date, regions_list)
             
-            s_md_path = daily_reports_dir / f"{screener_filename}.md"
-            s_html_path = daily_reports_dir / f"{screener_filename}.html"
+        elif p == "portfolio_reflect":
+            run_reflection_phase(regions_list, report_date, state)
+            save_pipeline_state(report_date, state)
             
-            with open(s_md_path, "w", encoding="utf-8") as f:
-                f.write(screener_md)
-            with open(s_html_path, "w", encoding="utf-8") as f:
-                f.write(screener_html)
-                
-            print_success(f"🎉 恭喜！量化選股掃描報告已成功產出並存檔！")
-            print_success(f"💾 Markdown 存檔路徑：{s_md_path}")
-            print_success(f"💾 HTML 存檔路徑：{s_html_path}")
-            print_success(f"💾 報告已成功同步寫入 {DB_TYPE.upper()} 數據庫。")
-        else:
-            print_warning("本次執行未觸發 any 板塊篩選，跳過選股報告生成。")
-    except Exception as e:
-        print_error(f"產出量化選股報告時發生錯誤: {e}")
-        
-    # LINE Notifier週報生成推送 (Phase 5)
-    try:
-        print_info("🔔 正在透過 LINE Messaging API 發送每週研報生成通知...")
-        from core.tools.line_notifier import LineNotifier
-        notifier = LineNotifier()
-        
-        # 1. 取得今日新增的推薦個股
-        all_active = db.get_active_recommendations()
-        today_recs = [rec for rec in all_active if rec.get("report_date") == report_date]
-        
-        # 2. 格式化 Regime 資訊
-        regime_msg = ""
-        for reg_name, reg_val in regional_regimes.items():
-            emoji = "🟢" if "BULL" in reg_val else ("🔴" if "BEAR" in reg_val else "🟡")
-            regime_msg += f"- {reg_name}專區：{reg_val} {emoji}\n"
-        if not regime_msg:
-            regime_msg = "- 暫無區域情境數據\n"
+        elif p == "analyze_macro":
+            run_analyze_macro_phase(regions_list, report_date, state)
+            save_pipeline_state(report_date, state)
             
-        # 3. 格式化新增推薦名單
-        recs_msg = ""
-        if today_recs:
-            for i, rec in enumerate(today_recs):
-                recs_msg += (
-                    f"{i+1}. 📌 {rec['ticker']} ({rec['company_name']})\n"
-                    f"   - 評級: {rec.get('rating', 'BUY')} | 推薦價: {rec['recommend_price']:.2f}\n"
-                    f"   - 區間: [{rec['stop_loss'] or 0:.1f} - {rec['target_price'] or 0:.1f}]\n"
-                )
-        else:
-            recs_msg = "本週經多代理人評估，無新增推薦買入個股（在庫持股維持不變）。\n"
+        elif p == "analyze_sectors":
+            run_analyze_sectors_phase(regions_list, report_date, state)
+            save_pipeline_state(report_date, state)
             
-        # 4. 組裝訊息
-        line_msg = (
-            f"📰 【投資研究代理人·每週策略週報完成】\n\n"
-            f"報告日期：{report_date} 📅\n\n"
-            f"🌐 **區域市場情境 (Regime)**：\n"
-            f"{regime_msg}\n"
-            f"📈 **本週最新量化決策強勢配置清單**：\n"
-            f"{recs_msg}\n"
-            f"💾 HTML 策略研報已生成並安全寫入 {DB_TYPE.upper()} 數據庫。\n"
-            f"檔案已儲存至您本地的週報歸檔庫。📁\n\n"
-            f"祝您本週交易順利，嚴格執行風控紀律！🚀"
-        )
-        
-        notifier.send_message(line_msg)
-    except Exception as line_ex:
-        print_error(f"LINE 週報推送失敗（跳過以防止程式崩潰）: {line_ex}")
-        
-    # 執行自適應 Prompt 演化引擎 (Phase 9)
-    try:
-        evolve_active_prompts()
-    except Exception as evolve_ex:
-        print_warning(f"自適應 Prompt 演化引擎執行失敗（安全跳過以避免阻斷週報主程式）: {evolve_ex}")
-        
-    print_success("\n==================================================")
-    print_success("🏁 投資策略研報與選股掃描 Pipeline 全數執行完畢！")
-    print_success("==================================================")
+        elif p == "screen_targets":
+            run_screen_targets_phase(regions_list, report_date, state)
+            save_pipeline_state(report_date, state)
+            
+        elif p == "analyze_stocks":
+            run_analyze_stocks_phase(regions_list, report_date, state)
+            save_pipeline_state(report_date, state)
+            
+        elif p == "weekly_report":
+            run_weekly_report_phase(regions_list, report_date, timestamp_suffix, daily_reports_dir, state)
+            save_pipeline_state(report_date, state)
+            
+        elif p == "screener_report":
+            run_screener_report_phase(regions_list, report_date, timestamp_suffix, daily_reports_dir, state)
+            save_pipeline_state(report_date, state)
+            
+        elif p == "notify":
+            run_notify_phase(regions_list, report_date, state)
+            
+        elif p == "prompt_evolve":
+            run_prompt_evolve_phase()
 
 def evolve_active_prompts():
     """
@@ -902,9 +758,9 @@ def run_realtime_query(query_str: str, track_option: bool, report_date: str):
         target_p_display = f"{target_p:.2f} {currency}"
         stop_l_display = f"{stop_l:.2f} {currency}"
         
-    print("\n" + "\033[92m" + "="*60 + "\033[0m")
+    print("\n" + "\033[93m" + "="*60 + "\033[0m")
     print("  🎯 第一章：智慧投資決策與交易指令概要 (Decision Card)")
-    print("\033[92m" + "="*60 + "\033[0m")
+    print("\033[93m" + "="*60 + "\033[0m")
     
     table_rows = [
         ("國家區域", region_display),
@@ -921,13 +777,13 @@ def run_realtime_query(query_str: str, track_option: bool, report_date: str):
     for key, val in table_rows:
         print(f"  • {key.ljust(10, '　')}: {val}")
         
-    print("\033[92m" + "="*60 + "\033[0m")
+    print("\033[93m" + "="*60 + "\033[0m")
     
-    print("\n" + "\033[94m" + "="*60 + "\033[0m")
+    print("\n" + "\033[96m" + "="*60 + "\033[0m")
     print("  🏦 第二章：投行量化估值模型報告 (Equity Valuation Engine Report)")
-    print("\033[94m" + "="*60 + "\033[0m")
+    print("\033[96m" + "="*60 + "\033[0m")
     print(valuation_report)
-    print("\033[94m" + "="*60 + "\033[0m")
+    print("\033[96m" + "="*60 + "\033[0m")
     
     print("\n" + "\033[93m" + "="*60 + "\033[0m")
     print("  💡 第三章：大模型深度基本面分析與決策修正 (LLM Report)")
@@ -1062,3 +918,533 @@ def run_prompt_evolution_test():
             
     except Exception as e:
         print_error(f"自適應 Prompt 演化測試模式中途發生錯誤: {e}")
+
+
+def load_pipeline_state(report_date: str) -> dict:
+    from core.config import CACHE_DIR
+    state_file = CACHE_DIR / f"pipeline_state_{report_date}.json"
+    if state_file.exists():
+        try:
+            with open(state_file, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            print_warning(f"載入快取狀態檔失敗: {e}")
+    return {}
+
+def save_pipeline_state(report_date: str, state: dict):
+    from core.config import CACHE_DIR
+    state_file = CACHE_DIR / f"pipeline_state_{report_date}.json"
+    try:
+        with open(state_file, "w", encoding="utf-8") as f:
+            json.dump(state, f, ensure_ascii=False, indent=4)
+    except Exception as e:
+        print_error(f"寫入快取狀態檔失敗: {e}")
+
+def init_pipeline_state_dates(state: dict):
+    if "start_date" not in state or "end_date" not in state or not state["start_date"]:
+        try:
+            us_bench = yf_tool.get_benchmark_performance("US")
+            state["start_date"] = us_bench.get("start_date", "")
+            state["end_date"] = us_bench.get("end_date", "")
+        except Exception as e:
+            print_warning(f"取得大盤本週計算區間失敗: {e}")
+            state["start_date"] = ""
+            state["end_date"] = ""
+
+def run_portfolio_check_phase(report_date: str, regions_list: list = None):
+    print_info("==================================================")
+    print_info(f"[Phase 1/10] 持股對帳與風控 (portfolio_check)")
+    print_info("==================================================")
+    run_portfolio_check(report_date, regions=regions_list)
+    print_success("[✓] 持股對帳與風控執行完成。")
+
+def run_reflection_phase(regions_list: list, report_date: str, state: dict):
+    print_info("==================================================")
+    print_info(f"[Phase 2/10] 歷史交易戰術反思 (portfolio_reflect)")
+    print_info("==================================================")
+    if "reflection" not in state:
+        state["reflection"] = {}
+        
+    for r_code in regions_list:
+        region_name = REGIONS[r_code]["name"]
+        print_info(f"[{region_name}] 正在啟動區域專屬歷史回測與決策反思...")
+        try:
+            directives = run_regional_reflection(r_code, report_date)
+            state["reflection"][r_code] = directives
+            time.sleep(3)
+        except Exception as ex:
+            print_error(f"[{r_code}] 執行區域專屬自我反思時失敗: {ex}")
+            state["reflection"][r_code] = "（本區域目前尚無歷史交易紀錄，暫無自我反思修正指令。請採用標準安全邊際進行基本面估值。）"
+    print_success("[✓] 歷史交易戰術反思執行完成。")
+
+def run_analyze_macro_phase(regions_list: list, report_date: str, state: dict):
+    print_info("==================================================")
+    print_info(f"[Phase 3/10] 總體經濟情境分析 (analyze_macro)")
+    print_info("==================================================")
+    if "analysis" not in state:
+        state["analysis"] = {}
+        
+    for r_code in regions_list:
+        region_name = REGIONS[r_code]["name"]
+        print_info(f"[{region_name}] 正在執行總體經濟分析...")
+        if r_code not in state["analysis"]:
+            state["analysis"][r_code] = {}
+        
+        macro_report, macro_regime = analyze_macro_regime(r_code)
+        
+        try:
+            from core.regime.registry import save_macro_regime
+            save_macro_regime(r_code, {
+                "regime": macro_regime,
+                "adx": 20.0,
+                "hurst": 0.50,
+                "ticker": "^GSPC" if r_code == "US" else "^TWII"
+            })
+            print_info(f"[{r_code}] 成功將總經市場情境標籤 {macro_regime} 寫入快取。")
+        except Exception as reg_ex:
+            print_error(f"[{r_code}] 無法將市場情境寫入快取: {reg_ex}")
+            
+        state["analysis"][r_code]["macro_report"] = macro_report
+        state["analysis"][r_code]["macro_regime"] = macro_regime
+        time.sleep(3)
+    print_success("[✓] 總體經濟情境分析執行完成。")
+
+def run_analyze_sectors_phase(regions_list: list, report_date: str, state: dict):
+    print_info("==================================================")
+    print_info(f"[Phase 4/10] 產業板塊資金流分析 (analyze_sectors)")
+    print_info("==================================================")
+    if "analysis" not in state:
+        state["analysis"] = {}
+        
+    for r_code in regions_list:
+        region_name = REGIONS[r_code]["name"]
+        if r_code not in state["analysis"]:
+            state["analysis"][r_code] = {}
+            
+        if "macro_regime" not in state["analysis"][r_code]:
+            try:
+                from core.regime.registry import get_macro_regime
+                macro_regime_info = get_macro_regime(r_code)
+                macro_regime = macro_regime_info.get("regime", "VOLATILE_RANGEBOUND") if isinstance(macro_regime_info, dict) else macro_regime_info
+            except Exception:
+                macro_regime = "VOLATILE_RANGEBOUND"
+            state["analysis"][r_code]["macro_regime"] = macro_regime
+            print_warning(f"[{region_name}] 快取無總經情境，已自資料庫或預設載入：{macro_regime}")
+            
+        macro_regime = state["analysis"][r_code]["macro_regime"]
+        
+        from core.regime.price_regime import detect_region as detect_price_regime
+        price_info = detect_price_regime(r_code)
+        price_regime = price_info.get("regime", "MOMENTUM_TREND")
+        print_info(f"[{region_name}] 偵測到價格氣候 (Price Regime): {price_regime} (ADX={price_info.get('adx', 'N/A'):.1f}, Hurst={price_info.get('hurst', 'N/A'):.2f})")
+        
+        sector_rankings = yf_tool.get_sector_rankings(r_code)
+        
+        print_info(f"[{region_name}] 正在獲取最強勢板塊之產業趨勢新聞...")
+        sector_news = []
+        try:
+            c_sectors = [sec for sec in sector_rankings if "Broad Market" not in sec["label"]]
+            if not c_sectors:
+                c_sectors = sector_rankings
+            top_2_sectors = c_sectors[:2]
+            for sec in top_2_sectors:
+                label = sec["label"]
+                match = re.match(r"^([^\(]+)", label)
+                sector_name = match.group(1).strip() if match else label
+                
+                if r_code == "US":
+                    query = f"US {sector_name} industry news when:7d"
+                    lang, reg = "en-US", "US"
+                else:
+                    query = f"台灣 {sector_name} 產業 新聞 when:7d"
+                    lang, reg = "zh-TW", "TW"
+                    
+                print_info(f"   - 正在檢索板塊【{label}】產業動向: '{query}'")
+                news_items = search_tool.search_news(query, max_items=2, language=lang, region=reg)
+                sector_news.extend(news_items)
+                time.sleep(2)
+        except Exception as sector_news_ex:
+            print_error(f"[{r_code}] 獲取板塊相關產業新聞時失敗: {sector_news_ex}")
+            
+        print_info(f"[{region_name}] 正在進行板塊強度排序與資金流向分析...")
+        market_agent = MarketAgent()
+        market_report = market_agent.analyze(region_name, sector_rankings, sector_news)
+        
+        try:
+            db.save_agent_inference_log(
+                rec_id=None,
+                agent_name="MarketAgent",
+                ticker=None,
+                input_prompt=market_agent.last_prompt,
+                output_response=market_report,
+                prompt_version=market_agent.prompt_version
+            )
+        except Exception as log_ex:
+            print(f"[!] Warning: 記錄 MarketAgent 推論日誌失敗: {log_ex}")
+            
+        state["analysis"][r_code]["price_regime"] = price_regime
+        state["analysis"][r_code]["sector_rankings"] = sector_rankings
+        state["analysis"][r_code]["market_report"] = market_report
+        time.sleep(3)
+    print_success("[✓] 產業板塊資金流分析執行完成。")
+
+def run_screen_targets_phase(regions_list: list, report_date: str, state: dict):
+    print_info("==================================================")
+    print_info(f"[Phase 5/10] 量化選股與目標篩選 (screen_targets)")
+    print_info("==================================================")
+    if "analysis" not in state:
+        state["analysis"] = {}
+        
+    for r_code in regions_list:
+        region_name = REGIONS[r_code]["name"]
+        if r_code not in state["analysis"]:
+            state["analysis"][r_code] = {}
+            
+        # 1. Fallback for macro_regime
+        if "macro_regime" not in state["analysis"][r_code]:
+            try:
+                from core.regime.registry import get_macro_regime
+                macro_regime_info = get_macro_regime(r_code)
+                macro_regime = macro_regime_info.get("regime", "VOLATILE_RANGEBOUND") if isinstance(macro_regime_info, dict) else macro_regime_info
+            except Exception:
+                macro_regime = "VOLATILE_RANGEBOUND"
+            state["analysis"][r_code]["macro_regime"] = macro_regime
+            print_warning(f"[{region_name}] 快取無總經情境，已自動載入：{macro_regime}")
+            
+        macro_regime = state["analysis"][r_code]["macro_regime"]
+            
+        # 2. Fallback for price_regime
+        if "price_regime" not in state["analysis"][r_code]:
+            try:
+                from core.regime.price_regime import detect_region as detect_price_regime
+                price_info = detect_price_regime(r_code)
+                price_regime = price_info.get("regime", "MOMENTUM_TREND")
+            except Exception:
+                price_regime = "MOMENTUM_TREND"
+            state["analysis"][r_code]["price_regime"] = price_regime
+            print_warning(f"[{region_name}] 快取無價格氣候，已自動計算：{price_regime}")
+            
+        price_regime = state["analysis"][r_code]["price_regime"]
+            
+        # 3. Fallback for sector_rankings
+        if "sector_rankings" not in state["analysis"][r_code]:
+            try:
+                sector_rankings = yf_tool.get_sector_rankings(r_code)
+            except Exception as e:
+                print_error(f"[{region_name}] 自動獲取板塊排行失敗: {e}")
+                sector_rankings = []
+            state["analysis"][r_code]["sector_rankings"] = sector_rankings
+            print_warning(f"[{region_name}] 快取無板塊排行，已自動重新抓取。")
+            
+        sector_rankings = state["analysis"][r_code]["sector_rankings"]
+        
+        max_scan_sectors = max(MAX_SECTORS_PER_REGION, MAX_STOCKS_PER_REGION)
+        top_etfs = [sec["ticker"] for sec in sector_rankings[:max_scan_sectors]]
+        print_info(f"[{region_name}] 本週焦點強勢板塊 ETF (自適應擴大)：{', '.join(top_etfs)}")
+        
+        state["analysis"][r_code]["top_etfs"] = top_etfs
+        state["analysis"][r_code]["target_stocks"] = []
+        
+        screener_instance = yf_tool.get_screener_instance()
+        screener_instance.clear_history()
+        
+        stocks_screened = 0
+        for etf_ticker in top_etfs:
+            if stocks_screened >= MAX_STOCKS_PER_REGION:
+                break
+                
+            sector_config = db.get_active_sectors(r_code).get(etf_ticker, {})
+            target_type = sector_config.get("target_type", "constituents")
+            
+            if target_type == "proxy":
+                target_stocks = [{
+                    "ticker": etf_ticker,
+                    "name": f"{sector_config.get('name', etf_ticker)}",
+                    "target_type": "proxy",
+                    "etf_ticker": etf_ticker
+                }]
+                print_info(f"[{region_name}] 板塊 {etf_ticker} 配置為直接投資 ETF 標的 (target_type: proxy)。")
+            else:
+                representative_stocks = yf_tool.get_etf_holdings(etf_ticker, region=r_code, macro_regime=macro_regime, price_regime=price_regime)
+                stocks_to_analyze = max(1, MAX_STOCKS_PER_REGION - stocks_screened)
+                stocks_to_analyze = min(stocks_to_analyze, 2)
+                target_stocks = representative_stocks[:stocks_to_analyze]
+                for s in target_stocks:
+                    s["target_type"] = "constituents"
+                    s["etf_ticker"] = etf_ticker
+                print_info(f"[{region_name}] 板塊 {etf_ticker} 配置為投資旗下成分股 (target_type: constituents)。")
+                
+            state["analysis"][r_code]["target_stocks"].extend(target_stocks)
+            stocks_screened += len(target_stocks)
+            
+        state["analysis"][r_code]["screener_session_history"] = list(screener_instance.session_history)
+        
+        print_info(f"[{region_name}] 篩選完成！本週待深度分析目標股清單：")
+        for idx, stock in enumerate(state["analysis"][r_code]["target_stocks"]):
+            print_info(f"   {idx+1}. {stock['name']} ({stock['ticker']}) [來源板塊: {stock['etf_ticker']}]")
+            
+    print_success("[✓] 量化選股與目標篩選執行完成。")
+
+def run_analyze_stocks_phase(regions_list: list, report_date: str, state: dict):
+    print_info("==================================================")
+    print_info(f"[Phase 6/10] 個股深度基本面估值 (analyze_stocks)")
+    print_info("==================================================")
+    if "analysis" not in state or not state["analysis"]:
+        raise ValueError("請先執行 screen_targets 階段！")
+        
+    screener_instance = yf_tool.get_screener_instance()
+    screener_instance.clear_history()
+    for r_code in regions_list:
+        if r_code in state["analysis"] and "screener_session_history" in state["analysis"][r_code]:
+            screener_instance.session_history.extend(state["analysis"][r_code]["screener_session_history"])
+            
+    for r_code in regions_list:
+        region_name = REGIONS[r_code]["name"]
+        if r_code not in state["analysis"] or "target_stocks" not in state["analysis"][r_code]:
+            raise ValueError(f"區域 {r_code} 缺少候選股票清單，請重跑 screen_targets！")
+            
+        target_stocks = state["analysis"][r_code]["target_stocks"]
+        macro_regime = state["analysis"][r_code]["macro_regime"]
+        macro_report = state["analysis"][r_code]["macro_report"]
+        price_regime = state["analysis"][r_code]["price_regime"]
+        reflection_directives = state.get("reflection", {}).get(r_code, "（無自我反思修正指令）")
+        
+        stock_analysis_reports = []
+        for stock in target_stocks:
+            ticker = stock["ticker"]
+            name = stock["name"]
+            target_type = stock.get("target_type", "constituents")
+            etf_ticker = stock.get("etf_ticker")
+            
+            print_info(f"[{region_name}] 🔍 正在對目標標的進行深度研究：{name} ({ticker})...")
+            custom_reason = f"直接買入強勢板塊 ETF {etf_ticker}，獲取行業平均 Beta 收益。" if target_type == "proxy" else f"板塊 {etf_ticker} 強勢動能領頭，精選旗下龍頭成分股。"
+            
+            res = research_and_track_asset(
+                ticker=ticker,
+                company_name=name,
+                region_code=r_code,
+                macro_regime=macro_regime,
+                macro_report=macro_report,
+                reflection_directives=reflection_directives,
+                report_date=report_date,
+                save_to_db=True,
+                custom_recommend_reason=custom_reason,
+                price_regime=price_regime
+            )
+            if not res:
+                continue
+                
+            if target_type == "proxy":
+                try:
+                    sector_rankings = state["analysis"][r_code]["sector_rankings"]
+                    etf_rank = next((sec for sec in sector_rankings if sec["ticker"] == etf_ticker), {})
+                    weekly_mom = etf_rank.get("weekly_return", 0.0)
+                    screener_instance.record_proxy_etf(etf_ticker, r_code, financials=res["financials"], weekly_return=weekly_mom)
+                except Exception as ex:
+                    print_warning(f"記錄篩選報告 proxy ETF 失敗: {ex}")
+                    
+            stock_analysis_reports.append(res["stock_report"])
+            print_success(f"標的 {ticker} 推薦參數與預算已成功寫入回測帳本！(現價: {res['financials'].get('current_price', 0.0):.2f} | 分配預算: {res['invested_amount']:.2f} | 股數: {res['shares']:.2f})")
+            
+        state["analysis"][r_code]["stock_reports_combined"] = "\n\n---\n\n".join(stock_analysis_reports)
+        
+    state["screener_session_history"] = list(screener_instance.session_history)
+    print_success("[✓] 個股深度基本面估值執行完成。")
+
+def run_weekly_report_phase(regions_list: list, report_date: str, timestamp_suffix: str, daily_reports_dir: Path, state: dict):
+    print_info("==================================================")
+    print_info(f"[Phase 7/10] 每週策略週報合成 (weekly_report)")
+    print_info("==================================================")
+    
+    start_date_str = state.get("start_date", "")
+    end_date_str = state.get("end_date", "")
+    
+    for r_code in regions_list:
+        region_name = REGIONS[r_code]["name"]
+        
+        if "analysis" not in state or r_code not in state["analysis"]:
+            raise ValueError(f"區域 {r_code} 缺少分析數據，請先執行前面的分析階段！")
+            
+        r_analysis = state["analysis"][r_code]
+        mac_rep = r_analysis.get("macro_report")
+        mkt_rep = r_analysis.get("market_report")
+        stk_rep = r_analysis.get("stock_reports_combined")
+        reflection_directives = state.get("reflection", {}).get(r_code, "（無自我反思修正指令）")
+        
+        if not mac_rep or not mkt_rep:
+            raise ValueError(f"區域 {r_code} 缺少宏觀或板塊分析數據，請重跑 analyze_macro 與 analyze_sectors！")
+            
+        print_info(f"✍ 正在調度總編輯代理人 (WriterAgent) 進行【{region_name}】專用策略週報撰寫...")
+        writer_agent = WriterAgent()
+        time.sleep(3)
+        
+        date_range_label = f"{report_date} (本週數據涵蓋區間: {start_date_str} 至 {end_date_str})" if start_date_str else report_date
+        
+        final_markdown = writer_agent.synthesize(
+            date_str=date_range_label,
+            macro_reports=[mac_rep],
+            market_reports=[mkt_rep],
+            stock_reports=[stk_rep or "本週暫無推薦股票分析。"],
+            reflection_report=reflection_directives
+        )
+        print_info(f"[{region_name}] 總編輯生成的原始週報長度: {len(final_markdown)} 字元。")
+        
+        try:
+            db.save_agent_inference_log(
+                rec_id=None,
+                agent_name="WriterAgent",
+                ticker=None,
+                input_prompt=writer_agent.last_prompt,
+                output_response=final_markdown,
+                prompt_version=writer_agent.prompt_version
+            )
+        except Exception as log_ex:
+            print(f"[!] Warning: 記錄 WriterAgent 推論日誌失敗: {log_ex}")
+            
+        r_start_date = start_date_str
+        r_end_date = end_date_str
+        try:
+            r_bench = yf_tool.get_benchmark_performance(r_code)
+            r_start_date = r_bench.get("start_date", r_start_date)
+            r_end_date = r_bench.get("end_date", r_end_date)
+        except Exception:
+            pass
+            
+        if r_start_date and r_end_date:
+            date_range_text = f"**Data Calculation Range: {r_start_date} to {r_end_date} (6 Trading Days, 5-Day Returns)**" if REPORT_LANGUAGE == "EN" else f"**本週數據涵蓋區間：{r_start_date} 至 {r_end_date}，共 6 個交易日 (計算 5 日累積收益)**"
+            
+            if REPORT_LANGUAGE == "EN":
+                r_lbl = "US Market" if r_code == "US" else "Taiwan Market"
+                region_title = f"# 🌍 Weekly {r_lbl} Investment Strategy & Multi-Agent Advisory Report {report_date}"
+                final_markdown = final_markdown.replace(f"# 🌍 Weekly Global Investment Strategy & Multi-Agent Advisory Report {report_date}", region_title)
+                if not final_markdown.startswith("#"):
+                    final_markdown = f"{region_title}\n{date_range_text}\n" + final_markdown
+                else:
+                    lines = final_markdown.splitlines()
+                    final_markdown = f"{region_title}\n{date_range_text}\n" + "\n".join(lines[1:])
+            else:
+                r_lbl = "美股" if r_code == "US" else "台股"
+                region_title = f"# 🌍 每週{r_lbl}投資策略與多維度決策週報 {report_date}"
+                final_markdown = final_markdown.replace(f"# 🌍 每週全球投資策略與多維度決策週報 {report_date}", region_title)
+                if not final_markdown.startswith("#"):
+                    final_markdown = f"{region_title}\n{date_range_text}\n" + final_markdown
+                else:
+                    lines = final_markdown.splitlines()
+                    final_markdown = f"{region_title}\n{date_range_text}\n" + "\n".join(lines[1:])
+                    
+        final_html = markdown.markdown(final_markdown, extensions=['fenced_code', 'tables'])
+        
+        report_filename = f"{report_date}_{timestamp_suffix}_{r_code}_{REPORT_LANGUAGE}"
+        db.save_report(report_filename, [r_code], final_markdown, final_html)
+        
+        md_file_path = daily_reports_dir / f"{report_filename}.md"
+        html_file_path = daily_reports_dir / f"{report_filename}.html"
+        
+        with open(md_file_path, "w", encoding="utf-8") as f:
+            f.write(final_markdown)
+        with open(html_file_path, "w", encoding="utf-8") as f:
+            f.write(final_html)
+            
+        print_success(f"🎉 恭喜！【{region_name}】專區投資決策白皮書已成功產出並存檔！")
+        print_success(f"💾 Markdown 存檔路徑：{md_file_path}")
+        print_success(f"💾 HTML 存檔路徑：{html_file_path}")
+
+def run_screener_report_phase(regions_list: list, report_date: str, timestamp_suffix: str, daily_reports_dir: Path, state: dict):
+    print_info("==================================================")
+    print_info(f"[Phase 8/10] 量化選股掃描報告產出 (screener_report)")
+    print_info("==================================================")
+    
+    screener_instance = yf_tool.get_screener_instance()
+    screener_instance.clear_history()
+    
+    history_loaded = False
+    for r_code in regions_list:
+        if "analysis" in state and r_code in state["analysis"]:
+            r_analysis = state["analysis"][r_code]
+            if "screener_session_history" in r_analysis:
+                screener_instance.session_history.extend(r_analysis["screener_session_history"])
+                history_loaded = True
+                
+    if "screener_session_history" in state:
+        screener_instance.session_history.extend(state["screener_session_history"])
+        history_loaded = True
+        
+    if not history_loaded:
+        print_warning("快取狀態中未找到任何選股歷史紀錄，將跳過或生成空的選股報告。")
+        
+    try:
+        screener_md, screener_html = screener_instance.generate_report(report_date)
+        if screener_md:
+            screener_filename = f"{report_date}_{timestamp_suffix}_screener_report_{REPORT_LANGUAGE}"
+            db.save_report(screener_filename, regions_list, screener_md, screener_html)
+            
+            s_md_path = daily_reports_dir / f"{screener_filename}.md"
+            s_html_path = daily_reports_dir / f"{screener_filename}.html"
+            
+            with open(s_md_path, "w", encoding="utf-8") as f:
+                f.write(screener_md)
+            with open(s_html_path, "w", encoding="utf-8") as f:
+                f.write(screener_html)
+                
+            print_success(f"🎉 恭喜！量化選股掃描報告已成功產出並存檔！")
+            print_success(f"💾 Markdown 存檔路徑：{s_md_path}")
+            print_success(f"💾 HTML 存檔路徑：{s_html_path}")
+            print_success(f"💾 報告已成功同步寫入 {DB_TYPE.upper()} 數據庫。")
+        else:
+            print_warning("本次執行未包含 any 選股歷史紀錄，跳過選股報告生成。")
+    except Exception as e:
+        print_error(f"產出量化選股報告時發生錯誤: {e}")
+
+def run_notify_phase(regions_list: list, report_date: str, state: dict):
+    print_info("==================================================")
+    print_info(f"[Phase 9/10] LINE 通知推送 (notify)")
+    print_info("==================================================")
+    try:
+        from core.tools.line_notifier import LineNotifier
+        notifier = LineNotifier()
+        
+        all_active = db.get_active_recommendations()
+        today_recs = [rec for rec in all_active if rec.get("report_date") == report_date]
+        
+        regime_msg = ""
+        for r_code in regions_list:
+            region_name = REGIONS[r_code]["name"]
+            reg_val = "UNKNOWN"
+            if "analysis" in state and r_code in state["analysis"]:
+                reg_val = state["analysis"][r_code].get("macro_regime", "UNKNOWN")
+            emoji = "🟢" if "BULL" in reg_val else ("🔴" if "BEAR" in reg_val else "🟡")
+            regime_msg += f"- {region_name}專區：{reg_val} {emoji}\n"
+            
+        recs_msg = ""
+        if today_recs:
+            for i, rec in enumerate(today_recs):
+                recs_msg += (
+                    f"{i+1}. 📌 {rec['ticker']} ({rec['company_name']})\n"
+                    f"   - 評級: {rec.get('rating', 'BUY')} | 推薦價: {rec['recommend_price']:.2f}\n"
+                    f"   - 區間: [{rec['stop_loss'] or 0:.1f} - {rec['target_price'] or 0:.1f}]\n"
+                )
+        else:
+            recs_msg = "本週經多代理人評估，無新增推薦買入個股（在庫持股維持不變）。\n"
+            
+        line_msg = (
+            f"📰 【投資研究代理人·每週策略週報完成】\n\n"
+            f"報告日期：{report_date} 📅\n\n"
+            f"🌐 **區域市場情境 (Regime)**：\n"
+            f"{regime_msg}\n"
+            f"📈 **本週最新量化決策強勢配置清單**：\n"
+            f"{recs_msg}\n"
+            f"💾 HTML 策略研報已生成並安全寫入 {DB_TYPE.upper()} 數據庫。\n"
+            f"檔案已儲存至您本地的週報歸檔庫。📁\n\n"
+            f"祝您本週交易順利，嚴格執行風控紀律！🚀"
+        )
+        notifier.send_message(line_msg)
+        print_success("LINE 通知推送成功。")
+    except Exception as line_ex:
+        print_error(f"LINE 週報推送失敗: {line_ex}")
+
+def run_prompt_evolve_phase():
+    print_info("==================================================")
+    print_info(f"[Phase 10/10] 底層指令系統升級 (prompt_evolve)")
+    print_info("==================================================")
+    evolve_active_prompts()
+    print_success("[✓] 底層指令系統升級執行完成。")
