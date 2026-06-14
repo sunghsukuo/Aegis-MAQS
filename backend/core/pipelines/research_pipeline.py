@@ -411,7 +411,7 @@ def run_regional_analysis(region_code: str, report_date: str, reflection_directi
             print_info(f"[{region_name}] 板塊 {etf_ticker} 配置為直接投資 ETF 標的 (target_type: proxy)。")
         else:
             # Otherwise, target constituent stocks
-            representative_stocks = yf_tool.get_etf_holdings(etf_ticker, region=region_code, macro_regime=macro_regime, price_regime=price_regime)
+            representative_stocks = yf_tool.screen_sector_candidates(etf_ticker, region=region_code, macro_regime=macro_regime, price_regime=price_regime)
             # Determine how many stocks to pull from this sector to respect our region limit
             stocks_to_analyze = max(1, MAX_STOCKS_PER_REGION - stocks_analyzed)
             # Grab at most 2 per sector for diversity if total limit allows, otherwise grab remaining
@@ -1183,7 +1183,7 @@ def run_screen_targets_phase(regions_list: list, report_date: str, state: dict):
                 }]
                 print_info(f"[{region_name}] 板塊 {etf_ticker} 配置為直接投資 ETF 標的 (target_type: proxy)。")
             else:
-                representative_stocks = yf_tool.get_etf_holdings(etf_ticker, region=r_code, macro_regime=macro_regime, price_regime=price_regime)
+                representative_stocks = yf_tool.screen_sector_candidates(etf_ticker, region=r_code, macro_regime=macro_regime, price_regime=price_regime)
                 stocks_to_analyze = max(1, MAX_STOCKS_PER_REGION - stocks_screened)
                 stocks_to_analyze = min(stocks_to_analyze, 2)
                 target_stocks = representative_stocks[:stocks_to_analyze]
