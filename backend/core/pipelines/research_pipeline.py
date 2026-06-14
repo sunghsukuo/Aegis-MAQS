@@ -156,7 +156,7 @@ def research_and_track_asset(
             budget_agent = BudgetAgent()
             invested_amount, shares = budget_agent.allocate_budget(ticker, region_code, curr_price, custom_weight=suggested_weight)
         
-        reason = custom_recommend_reason or f"Aegis-MAQS 自動分析。當前大盤狀態: {market_regime}。"
+        reason = custom_recommend_reason or f"Aegis-MAQS 自動分析。當前大盤狀態: {macro_regime}。"
         try:
             rec_id = db.save_recommendation(
                 report_date=report_date,
@@ -169,7 +169,9 @@ def research_and_track_asset(
                 stop_loss=stop_l,
                 rating=rating,
                 invested_amount=invested_amount,
-                shares=shares
+                shares=shares,
+                macro_regime=macro_regime,
+                price_regime=price_regime
             )
             
             if invested_amount > 0.0:
