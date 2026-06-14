@@ -45,7 +45,8 @@ def research_and_track_asset(
     report_date: str,
     save_to_db: bool = True,
     is_weekly_pipeline: bool = True,
-    custom_recommend_reason: str = None
+    custom_recommend_reason: str = None,
+    price_regime: str = None
 ) -> dict:
     """
     統一「單一標的深度分析與模擬下單/追蹤管線」。
@@ -90,7 +91,10 @@ def research_and_track_asset(
 【投行級別量化估值模型報告 (Equity Valuation Engine)】:
 {valuation_report}
 """
-    stock_report = fundamental_agent.analyze(ticker, company_name, financials, news_analysis, combined_context, macro_regime=macro_regime)
+    stock_report = fundamental_agent.analyze(
+        ticker, company_name, financials, news_analysis, combined_context,
+        macro_regime=macro_regime, price_regime=price_regime
+    )
     time.sleep(2)
     
     # 解析輸出參數
@@ -429,7 +433,8 @@ def run_regional_analysis(region_code: str, report_date: str, reflection_directi
                 reflection_directives=reflection_directives,
                 report_date=report_date,
                 save_to_db=True,
-                custom_recommend_reason=custom_reason
+                custom_recommend_reason=custom_reason,
+                price_regime=price_regime
             )
             
             if not res:
@@ -710,6 +715,15 @@ def run_realtime_query(query_str: str, track_option: bool, report_date: str):
     macro_report, macro_regime, reflection_directives = get_latest_regime_and_reflection(region_code)
     print_success(f"當前大盤市場情境標籤：{macro_regime}")
     
+    # Detect price regime dynamically
+    from core.regime.price_regime import detect_region as detect_price_regime
+    try:
+        price_info = detect_price_regime(region_code)
+        price_regime = price_info.get("regime", "MOMENTUM_TREND")
+    except Exception:
+        price_regime = "MOMENTUM_TREND"
+    print_success(f"當前大盤價格氣候標籤：{price_regime}")
+    
     res = research_and_track_asset(
         ticker=ticker,
         company_name=display_name,
@@ -720,7 +734,8 @@ def run_realtime_query(query_str: str, track_option: bool, report_date: str):
         report_date=report_date,
         save_to_db=track_option,
         is_weekly_pipeline=False,
-        custom_recommend_reason=f"Aegis-MAQS 即時查詢注入追蹤。當前市場情境: {macro_regime}。"
+        custom_recommend_reason=f"Aegis-MAQS 即時查詢注入追蹤。當前市場情境: {macro_regime}。",
+        price_regime=price_regime
     )
     
     if not res:
@@ -1038,6 +1053,7 @@ def run_analyze_sectors_phase(regions_list: list, report_date: str, state: dict)
         price_regime = price_info.get("regime", "MOMENTUM_TREND")
         print_info(f"[{region_name}] 偵測到價格氣候 (Price Regime): {price_regime} (ADX={price_info.get('adx', 'N/A'):.1f}, Hurst={price_info.get('hurst', 'N/A'):.2f})")
         
+        print_info(f"[{region_name}] 正在獲取板塊績效排名...")
         sector_rankings = yf_tool.get_sector_rankings(r_code)
         
         print_info(f"[{region_name}] 正在獲取最強勢板塊之產業趨勢新聞...")
