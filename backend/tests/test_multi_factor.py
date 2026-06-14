@@ -12,17 +12,17 @@ class TestMultiFactorRegime(unittest.TestCase):
     
     def setUp(self):
         from core.config import CACHE_DIR
-        self.cache_path = CACHE_DIR / "meso_regime.json"
-        if self.cache_path.exists():
+        for f in CACHE_DIR.glob("meso_regime*.json"):
             try:
-                self.cache_path.unlink()
+                f.unlink()
             except Exception:
                 pass
 
     def tearDown(self):
-        if hasattr(self, 'cache_path') and self.cache_path.exists():
+        from core.config import CACHE_DIR
+        for f in CACHE_DIR.glob("meso_regime*.json"):
             try:
-                self.cache_path.unlink()
+                f.unlink()
             except Exception:
                 pass
                 

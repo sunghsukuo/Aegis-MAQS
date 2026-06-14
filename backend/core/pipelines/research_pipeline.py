@@ -1226,6 +1226,7 @@ def run_analyze_stocks_phase(regions_list: list, report_date: str, state: dict):
         reflection_directives = state.get("reflection", {}).get(r_code, "（無自我反思修正指令）")
         
         stock_analysis_reports = []
+        analyzed_summary = []
         for stock in target_stocks:
             ticker = stock["ticker"]
             name = stock["name"]
@@ -1260,9 +1261,15 @@ def run_analyze_stocks_phase(regions_list: list, report_date: str, state: dict):
                     print_warning(f"記錄篩選報告 proxy ETF 失敗: {ex}")
                     
             stock_analysis_reports.append(res["stock_report"])
+            analyzed_summary.append({
+                "ticker": ticker,
+                "name": name,
+                "rating": res["rating"]
+            })
             print_success(f"標的 {ticker} 推薦參數與預算已成功寫入回測帳本！(現價: {res['financials'].get('current_price', 0.0):.2f} | 分配預算: {res['invested_amount']:.2f} | 股數: {res['shares']:.2f})")
             
         state["analysis"][r_code]["stock_reports_combined"] = "\n\n---\n\n".join(stock_analysis_reports)
+        state["analysis"][r_code]["analyzed_stocks_summary"] = analyzed_summary
         
     state["screener_session_history"] = list(screener_instance.session_history)
     print_success("[✓] 個股深度基本面估值執行完成。")
@@ -1287,6 +1294,17 @@ def run_weekly_report_phase(regions_list: list, report_date: str, timestamp_suff
         stk_rep = r_analysis.get("stock_reports_combined")
         reflection_directives = state.get("reflection", {}).get(r_code, "（無自我反思修正指令）")
         
+        # Build candidate_summary text
+        analyzed_summary_list = r_analysis.get("analyzed_stocks_summary", [])
+        candidate_summary = ""
+        if analyzed_summary_list:
+            candidate_summary += "本週所有進行深度基本面分析之候選標的與評級如下：\n"
+            for item in analyzed_summary_list:
+                rating_label = "買入 Buy" if item['rating'] == "Buy" else "強烈買入 Strong Buy" if item['rating'] == "Strong Buy" else "持有 Hold" if item['rating'] == "Hold" else "避免買入 Avoid"
+                candidate_summary += f"- {item['name']} ({item['ticker']}): 最終分析評級為【{rating_label}】。\n"
+        else:
+            candidate_summary = "本週無待分析之個股。"
+            
         if not mac_rep or not mkt_rep:
             raise ValueError(f"區域 {r_code} 缺少宏觀或板塊分析數據，請重跑 analyze_macro 與 analyze_sectors！")
             
@@ -1301,7 +1319,8 @@ def run_weekly_report_phase(regions_list: list, report_date: str, timestamp_suff
             macro_reports=[mac_rep],
             market_reports=[mkt_rep],
             stock_reports=[stk_rep or "本週暫無推薦股票分析。"],
-            reflection_report=reflection_directives
+            reflection_report=reflection_directives,
+            candidate_summary=candidate_summary
         )
         print_info(f"[{region_name}] 總編輯生成的原始週報長度: {len(final_markdown)} 字元。")
         

@@ -30,7 +30,7 @@ class WriterAgent(BaseAgent):
         )
 
     def synthesize(self, date_str: str, macro_reports: list, market_reports: list,
-                   stock_reports: list, reflection_report: str) -> str:
+                   stock_reports: list, reflection_report: str, candidate_summary: str = None) -> str:
         """Synthesizes all analyst sub-reports into a single comprehensive Weekly Investment Report."""
         
         # Structure the giant context prompt for synthesis
@@ -47,6 +47,14 @@ class WriterAgent(BaseAgent):
 
 【語言與寫作指示】：
 {lang_directive}
+
+【總編輯特別任務 ── 決策評級透明度】：
+本週所有被分析的候選標的與其初步評級如下：
+{candidate_summary or "（無）"}
+
+請遵循以下寫作紀律以求決策透明：
+1. 僅將評級為 Buy 或 Strong Buy 的標的列入「### 📋 本週推薦配置總覽表」中。
+2. 所有評級為 Hold（持有/觀望）或 Sell / Avoid（避免買入）的標的，**必須無一遺漏地**列入「### ⚠️ 本週排除/觀望標的與防禦警示」表格，並在下方寫出具體的不推薦原因（例如：估值高估、風險報酬比不合要求、或大盤熔斷凍結），每檔限 50-80 字，使投資人清晰掌握不推薦的理由，絕不允許隨意遺漏！
 
 ==================================================
 【1. 各區域總體經濟分析師子報告】：
