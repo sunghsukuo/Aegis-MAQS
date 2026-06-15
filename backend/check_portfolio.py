@@ -293,7 +293,7 @@ def run_portfolio_check(report_date: str, regions: list = None):
 
                 
                 previously_triggered = db.get_risk_circuit_breaker(curr)
-                triggered = (current_mdd > mdd_limit) or (current_drop > mdd_limit)
+                triggered = current_drop > mdd_limit
                 
                 # Sync circuit breaker state in database
                 db.update_risk_circuit_breaker(curr, 1 if triggered else 0)
