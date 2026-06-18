@@ -247,10 +247,10 @@ def resolve_taiwan_ticker_locally(query_str: str) -> dict:
     if not _is_potential_taiwan_query(query_str):
         return None
 
-    # 1. Clean code format check (e.g. "3293.TWO" or "2330.TW")
-    m = re.match(r"^(\d+)\.(TW|TWO)$", query_str, re.IGNORECASE)
+    # 1. Clean code format check (e.g. "3293.TWO", "2330.TW", "00988A.TW")
+    m = re.match(r"^([0-9A-Za-z]+)\.(TW|TWO)$", query_str, re.IGNORECASE)
     if m:
-        code = m.group(1)
+        code = m.group(1).upper()
         suffix = m.group(2).upper()
         # Look up Chinese name
         name_zh = get_taiwan_stock_name(code)
