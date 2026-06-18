@@ -236,18 +236,87 @@ class TestTrailingStop(unittest.TestCase):
             triggered = True
         self.assertTrue(triggered)
 
+    @patch("yfinance.Ticker")
+    @patch("core.db_manager.db_session")
+    def test_chandelier_stop_upward_move(self, mock_db_session, mock_ticker):
+        from core.risk.trailing_stop import check_and_apply_chandelier_stop
+        import pandas as pd
+        
+        # Mock history with a peak price of 120
+        mock_hist = pd.DataFrame({
+            "High": [105.0, 110.0, 120.0, 115.0]
+        })
+        mock_ticker.return_value.history.return_value = mock_hist
+        
+        # rec setup: stop_loss initially 90.0, entry 100.0
+        rec = {"id": 999, "ticker": "AAPL", "report_date": "2026-06-01", "recommend_price": 100.0, "stop_loss": 90.0, "macro_regime": "MOMENTUM_TREND"}
+        
+        # Under MOMENTUM_TREND regime, k = 2.0 * sqrt(beta). If beta=1.0, k=2.0.
+        # Peak = 120.0, ATR = 5.0. Chandelier stop = 120 - 2.0 * 5 = 110.0.
+        # Since 110.0 > 90.0 (original stop loss), it should update the stop loss to 110.0.
+        triggered = check_and_apply_chandelier_stop(rec, current_price=118.0, atr_14=5.0, beta=1.0, macro_regime="MOMENTUM_TREND")
+        self.assertTrue(triggered)
+        self.assertEqual(rec["stop_loss"], 110.0)
+
+    @patch("yfinance.Ticker")
+    @patch("core.db_manager.db_session")
+    def test_chandelier_stop_no_downward_move(self, mock_db_session, mock_ticker):
+        from core.risk.trailing_stop import check_and_apply_chandelier_stop
+        import pandas as pd
+        
+        # Mock history with a peak price of 105 (no big upward trend)
+        mock_hist = pd.DataFrame({
+            "High": [102.0, 105.0, 101.0]
+        })
+        mock_ticker.return_value.history.return_value = mock_hist
+        
+        # rec setup: stop_loss already 98.0
+        rec = {"id": 999, "ticker": "AAPL", "report_date": "2026-06-01", "recommend_price": 100.0, "stop_loss": 98.0, "macro_regime": "MOMENTUM_TREND"}
+        
+        # Peak = 105.0, ATR = 5.0, k = 2.0. Chandelier stop = 105 - 10 = 95.0.
+        # Since 95.0 < 98.0, the stop loss should NOT move down.
+        triggered = check_and_apply_chandelier_stop(rec, current_price=101.0, atr_14=5.0, beta=1.0, macro_regime="MOMENTUM_TREND")
+        self.assertFalse(triggered)
+        self.assertEqual(rec["stop_loss"], 98.0) # Unchanged
+
+    @patch("yfinance.Ticker")
+    @patch("core.db_manager.db_session")
+    def test_chandelier_stop_defensive_cap(self, mock_db_session, mock_ticker):
+        from core.risk.trailing_stop import check_and_apply_chandelier_stop
+        import pandas as pd
+        
+        # Mock history where stock hit a peak of 120, but then pulled back to 105
+        mock_hist = pd.DataFrame({
+            "High": [100.0, 120.0, 105.0]
+        })
+        mock_ticker.return_value.history.return_value = mock_hist
+        
+        rec = {"id": 999, "ticker": "AAPL", "report_date": "2026-06-01", "recommend_price": 100.0, "stop_loss": 90.0, "macro_regime": "MOMENTUM_TREND"}
+        
+        # Peak = 120. ATR is 2.0. k is 2.0. Chandelier stop = 120 - 4.0 = 116.0.
+        # But current price is 105.0.
+        # Since Chandelier stop (116.0) >= current price (105.0), it should cap at current_price * 0.99 = 103.95.
+        # Since 103.95 > 90.0 (original stop loss), it should update the stop loss to 103.95.
+        triggered = check_and_apply_chandelier_stop(rec, current_price=105.0, atr_14=2.0, beta=1.0, macro_regime="MOMENTUM_TREND")
+        self.assertTrue(triggered)
+        self.assertAlmostEqual(rec["stop_loss"], 103.95)
+
 
 class TestBudgetAgent(unittest.TestCase):
 
+    @patch("core.tools.yahoo_finance.get_sector_rankings")
+    @patch("core.risk.earnings_blocker.is_earnings_block_active")
     @patch("core.agents.budget_agent.BudgetAgent.get_capital_state")
     @patch("core.db_manager.get_risk_circuit_breaker")
     @patch("core.regime.multi_factor.detect_meso_regime")
     @patch("core.agents.budget_agent.BudgetAgent.get_ticker_sector")
     @patch("core.agents.budget_agent.execute_sql")
-    def test_budget_allocation_under_regimes(self, mock_sql, mock_sector, mock_detect, mock_breaker, mock_state):
+    def test_budget_allocation_under_regimes(self, mock_sql, mock_sector, mock_detect, mock_breaker, mock_state, mock_earnings, mock_rankings):
         from core.agents.budget_agent import BudgetAgent
         
         # Setup mocks
+        mock_rankings.return_value = None
+        mock_earnings.return_value = (False, None, 0)
         mock_breaker.return_value = False
         mock_state.return_value = {"currency": "USD", "available_capital": 10000.0, "reserved_cash": 0.0}
         
@@ -302,6 +371,127 @@ class TestBudgetAgent(unittest.TestCase):
         amount, shares = agent.allocate_budget("AAPL", "US", 100.0)
         # All sectors capped at 20%
         self.assertAlmostEqual(amount, 2000.0)
+
+    @patch("core.risk.earnings_blocker.is_earnings_block_active")
+    @patch("core.agents.budget_agent.BudgetAgent.get_capital_state")
+    def test_budget_allocation_blocked_by_earnings(self, mock_state, mock_earnings):
+        from core.agents.budget_agent import BudgetAgent
+        
+        mock_state.return_value = {"currency": "USD", "available_capital": 10000.0, "reserved_cash": 0.0}
+        # Mock earnings blocker is active
+        import datetime
+        mock_earnings.return_value = (True, datetime.date(2026, 7, 31), 3)
+        
+        agent = BudgetAgent()
+        amount, shares = agent.allocate_budget("AAPL", "US", 100.0)
+        
+        self.assertEqual(amount, 0.0)
+        self.assertEqual(shares, 0.0)
+
+    @patch("core.tools.yahoo_finance.get_sector_rankings")
+    @patch("core.risk.earnings_blocker.is_earnings_block_active")
+    @patch("core.agents.budget_agent.BudgetAgent.get_capital_state")
+    @patch("core.db_manager.get_risk_circuit_breaker")
+    @patch("core.regime.multi_factor.detect_meso_regime")
+    @patch("core.agents.budget_agent.BudgetAgent.get_ticker_sector")
+    @patch("core.agents.budget_agent.execute_sql")
+    def test_budget_allocation_dynamic_sector_caps(self, mock_sql, mock_sector, mock_detect, mock_breaker, mock_state, mock_earnings, mock_rankings):
+        from core.agents.budget_agent import BudgetAgent
+        
+        mock_earnings.return_value = (False, None, 0)
+        mock_breaker.return_value = False
+        mock_state.return_value = {"currency": "USD", "available_capital": 10000.0, "reserved_cash": 0.0}
+        mock_detect.return_value = {"regime": "BULL_GROWTH_ON", "vix_scale": 1.0}
+        
+        # Test Case 1: Ticker is AAPL, and its sector code is XLK
+        mock_sector.return_value = "XLK"
+        
+        # Mock rankings: XLK is top (index 0 < 3) -> Top tier
+        # In BULL_GROWTH_ON: Top tier max_ratio is 40% (0.40)
+        # So agent with allocation_ratio=0.50 should get capped at 40% -> 4000.0 amount, 40 shares
+        mock_rankings.return_value = [
+            {"ticker": "XLK", "weekly_return": 0.05},
+            {"ticker": "XLF", "weekly_return": 0.02},
+            {"ticker": "XLV", "weekly_return": 0.01},
+            {"ticker": "XLE", "weekly_return": -0.01}
+        ]
+        
+        agent = BudgetAgent(allocation_ratio=0.50)
+        amount, shares = agent.allocate_budget("AAPL", "US", 100.0)
+        self.assertAlmostEqual(amount, 4000.0)
+        self.assertEqual(shares, 40)
+        
+        # Test Case 2: Sector XLK is bottom (index 3 out of 4 -> bottom tier)
+        # In BULL_GROWTH_ON: Bottom tier max_ratio is 10% (0.10)
+        # So agent with allocation_ratio=0.50 should get capped at 10% -> 1000.0 amount, 10 shares
+        mock_rankings.return_value = [
+            {"ticker": "XLF", "weekly_return": 0.05},
+            {"ticker": "XLV", "weekly_return": 0.02},
+            {"ticker": "XLE", "weekly_return": 0.01},
+            {"ticker": "XLK", "weekly_return": -0.01}
+        ]
+        
+        amount, shares = agent.allocate_budget("AAPL", "US", 100.0)
+        self.assertAlmostEqual(amount, 1000.0)
+        self.assertEqual(shares, 10)
+
+
+
+class TestEarningsBlocker(unittest.TestCase):
+    @patch("yfinance.Ticker")
+    def test_get_upcoming_earnings_date_success(self, mock_ticker):
+        from core.risk.earnings_blocker import get_upcoming_earnings_date
+        import datetime
+        
+        expected_date = datetime.date(2026, 7, 31)
+        mock_ticker.return_value.calendar = {
+            "Earnings Date": [expected_date]
+        }
+        
+        res = get_upcoming_earnings_date("AAPL")
+        self.assertEqual(res, expected_date)
+
+    def test_get_business_days_diff(self):
+        from core.risk.earnings_blocker import get_business_days_diff
+        import datetime
+        
+        # Wednesday to next Wednesday is 5 business days: Thu(1), Fri(2), Mon(3), Tue(4), Wed(5)
+        d1 = datetime.date(2026, 6, 17) # Wednesday
+        d2 = datetime.date(2026, 6, 24) # Next Wednesday
+        self.assertEqual(get_business_days_diff(d1, d2), 5)
+        
+        # Wednesday to next Thursday is 6 business days
+        d3 = datetime.date(2026, 6, 25)
+        self.assertEqual(get_business_days_diff(d1, d3), 6)
+        
+        # d2 <= d1 should return 0
+        self.assertEqual(get_business_days_diff(d2, d1), 0)
+
+    @patch("core.risk.earnings_blocker.get_upcoming_earnings_date")
+    def test_is_earnings_block_active(self, mock_get_earnings):
+        from core.risk.earnings_blocker import is_earnings_block_active
+        import datetime
+        
+        mock_get_earnings.return_value = datetime.date(2026, 6, 24)
+        
+        # Test Case 1: Checking on 2026-06-17. Diff is 5 business days. Should be BLOCKED.
+        blocked, ed, diff = is_earnings_block_active("AAPL", "2026-06-17")
+        self.assertTrue(blocked)
+        self.assertEqual(diff, 5)
+        
+        # Test Case 2: Checking on 2026-06-16. Diff is 6 business days. Should NOT be BLOCKED.
+        blocked, ed, diff = is_earnings_block_active("AAPL", "2026-06-16")
+        self.assertFalse(blocked)
+        self.assertEqual(diff, 6)
+        
+        # Test Case 3: Checking on 2026-06-25. Earnings date passed. Should NOT be BLOCKED.
+        blocked, ed, diff = is_earnings_block_active("AAPL", "2026-06-25")
+        self.assertFalse(blocked)
+        
+        # Test Case 4: Missing earnings date. Should NOT be BLOCKED.
+        mock_get_earnings.return_value = None
+        blocked, ed, diff = is_earnings_block_active("AAPL", "2026-06-17")
+        self.assertFalse(blocked)
 
 
 if __name__ == "__main__":

@@ -1,7 +1,8 @@
 import numpy as np
 import pandas as pd
 import yfinance as yf
-from core.config import REGIONS
+from core.config import REGIONS, CACHE_DIR
+from core.tools.utils import get_cached_data, save_to_cache
 
 def calculate_hurst(ts) -> float:
     """
@@ -99,6 +100,15 @@ def detect_ticker(ticker: str) -> dict:
     """
     Determines if the ticker is currently in a MOMENTUM_TREND, MEAN_REVERSION_RANGE, or VOLATILE_RANGEBOUND regime.
     """
+    ticker_clean = ticker.strip().upper()
+    cache_key = f"price_regime_{ticker_clean}"
+    
+    # Try to fetch from 12-hour local file cache
+    cached = get_cached_data(CACHE_DIR, cache_key, ttl_hours=12)
+    if cached:
+        print(f"[✓] [Cache Hit] 成功載入大盤價格氣候快取 ({ticker_clean})：{cached.get('regime')}")
+        return cached
+
     try:
         t = yf.Ticker(ticker)
         # Fetch 2y history to get enough data for a stable 1-year rolling window of indicators
@@ -121,12 +131,17 @@ def detect_ticker(ticker: str) -> dict:
             else:
                 regime = "MOMENTUM_TREND"
                 
-            return {
+            res = {
                 "regime": regime,
                 "adx": adx_val,
                 "hurst": hurst_val,
                 "ticker": ticker
             }
+            try:
+                save_to_cache(CACHE_DIR, cache_key, res)
+            except Exception:
+                pass
+            return res
             
         # 1-year historical calibration window (approx 250 trading days)
         num_eval_days = min(250, len(close) - 60)
@@ -155,7 +170,7 @@ def detect_ticker(ticker: str) -> dict:
         else:
             regime = "VOLATILE_RANGEBOUND"
             
-        return {
+        res = {
             "regime": regime,
             "adx": adx_val,
             "hurst": hurst_val,
@@ -163,6 +178,11 @@ def detect_ticker(ticker: str) -> dict:
             "hurst_percentile": hurst_pct,
             "ticker": ticker
         }
+        try:
+            save_to_cache(CACHE_DIR, cache_key, res)
+        except Exception:
+            pass
+        return res
     except Exception as e:
         print(f"[!] Error detecting price regime for {ticker}: {e}")
         return {"regime": "MOMENTUM_TREND", "adx": 20.0, "hurst": 0.50}

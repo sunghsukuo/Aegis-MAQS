@@ -28,6 +28,11 @@ class LineNotifier:
         Sends a single text push message to the configured LINE User ID.
         Wrapped in defensive exceptions so any connection failures DO NOT crash the calling agent pipeline.
         """
+        # Mute all LINE notifications during backtesting to prevent spamming
+        if os.environ.get("AEGIS_IN_BACKTEST") == "1":
+            print("[🛡️ 回測沙盒] 偵測到回測模式，自動攔截並靜音 LINE 通知。")
+            return True
+
         if not self.token or not self.user_id:
             print("[✗] LINE Notifier: Skipping message send due to missing credentials.")
             return False

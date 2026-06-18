@@ -1,5 +1,6 @@
 import yfinance as yf
 import pandas as pd
+import requests
 from datetime import datetime, timedelta
 from core.config import REGIONS, CACHE_DIR
 from core.tools.utils import retry_on_exception, get_cached_data, save_to_cache
@@ -77,7 +78,7 @@ def get_benchmark_performance(region_code: str) -> dict:
 def _get_single_etf_performance(etf_ticker: str, label_name: str) -> dict:
     """Fetches single ETF weekly performance with robust retries."""
     t = yf.Ticker(etf_ticker)
-    hist = t.history(period="10d").dropna(subset=["Close"])  # Pull slightly more to ensure enough days
+    hist = t.history(period="30d").dropna(subset=["Close"])  # Pull more to ensure enough trading days even after long holidays like CNY
     if hist.empty or len(hist) < 6:
         raise ValueError(f"No sufficient history data for ETF {etf_ticker}")
         
@@ -226,117 +227,191 @@ def calculate_technical_metrics(ticker: str) -> dict:
         print(f"Error calculating technical metrics for {ticker}: {e}")
         return {"rsi_14": None, "sma_20": None, "atr_14": None, "beta": 1.0}
 
-@retry_on_exception(tries=3, delay=2, backoff=2)
-def _get_stock_financials_raw(ticker: str) -> dict:
-    """Internal raw fundamentals fetcher with retries."""
+from contextlib import contextmanager
+import sys
+import logging
+
+@contextmanager
+def silence_all():
+    """Context manager to completely suppress stdout, stderr, and logging outputs from yfinance or other modules."""
+    import os
+    yf_logger = logging.getLogger("yfinance")
+    old_yf_level = yf_logger.level
+    yf_logger.setLevel(logging.CRITICAL)
+    
+    root_logger = logging.getLogger()
+    old_root_level = root_logger.level
+    root_logger.setLevel(logging.CRITICAL)
+    
+    with open(os.devnull, "w") as devnull:
+        old_stdout = sys.stdout
+        old_stderr = sys.stderr
+        sys.stdout = devnull
+        sys.stderr = devnull
+        try:
+            yield
+        finally:
+            sys.stdout = old_stdout
+            sys.stderr = old_stderr
+            yf_logger.setLevel(old_yf_level)
+            root_logger.setLevel(old_root_level)
+
+def is_etf_ticker(ticker: str) -> bool:
+    """Helper to quickly check if a ticker is an ETF or index using a 4-tiered fallback approach."""
+    ticker_clean = ticker.strip().upper()
+    
+    # Tier 1: Fetch yfinance quoteType (Network verification)
     t = yf.Ticker(ticker)
-    info = t.info
-    fast_info = t.fast_info
-    
-    current_price = fast_info.get("lastPrice") or info.get("currentPrice") or info.get("regularMarketPrice")
-    if not current_price:
-        # Fallback to daily history
-        hist = t.history(period="1d").dropna(subset=["Close"])
-        if not hist.empty:
-            current_price = hist["Close"].iloc[-1]
+    with silence_all():
+        try:
+            quote_type = t.fast_info.get("quoteType")
+            if quote_type:
+                if quote_type.upper() == "ETF":
+                    return True
+                elif quote_type.upper() == "EQUITY":
+                    return False
+        except Exception:
+            pass
             
-    if not current_price:
-        raise ValueError(f"No current price available for fundamentals of {ticker}")
-        
-    # Determine if this ticker is an ETF or index proxy
-    is_etf = False
-    quote_type = info.get("quoteType")
-    
-    # Check if the sector config explicitly flags this as a stock (is_etf: False)
-    is_etf_in_config = True
+        try:
+            info_temp = t.info or {}
+            quote_type = info_temp.get("quoteType")
+            if quote_type:
+                if quote_type.upper() == "ETF":
+                    return True
+                elif quote_type.upper() == "EQUITY":
+                    return False
+        except Exception:
+            pass
+
+    # Tier 2: Check database and sectors config (Explicit user/system definition)
     try:
         import core.db_manager as db
         for r_code in REGIONS.keys():
-            sec_config = db.get_active_sectors(r_code).get(ticker.upper())
-            if isinstance(sec_config, dict) and sec_config.get("is_etf") is False:
-                is_etf_in_config = False
-                break
+            sec_config = db.get_active_sectors(r_code).get(ticker_clean)
+            if isinstance(sec_config, dict) and "is_etf" in sec_config:
+                return bool(sec_config["is_etf"])
     except Exception:
-        for r_info in REGIONS.values():
-            sec_config = r_info.get("sector_etfs", {}).get(ticker.upper())
-            if isinstance(sec_config, dict) and sec_config.get("is_etf") is False:
-                is_etf_in_config = False
-                break
-            
-    if quote_type == "ETF":
-        is_etf = True
-    elif quote_type == "EQUITY":
-        is_etf = False
-    else:
-        # Fallback if yfinance quote_type is missing/rate-limited
-        configured_etfs = set()
-        try:
-            import core.db_manager as db
-            for r_code in REGIONS.keys():
-                configured_etfs.update(k.upper() for k in db.get_active_sectors(r_code).keys())
-        except Exception:
-            configured_etfs = {etf.upper() for r in REGIONS.values() for etf in r.get("sector_etfs", {}).keys()}
-            
-        if ticker.upper() in configured_etfs and is_etf_in_config:
-            is_etf = True
+        pass
         
-    # Get company name
-    raw_name = info.get("longName") or info.get("shortName") or ticker
-    if ticker.endswith(".TW") or ticker.endswith(".TWO"):
-        ticker_num = ticker.split(".")[0]
-        from core.tools.taiwan_stock_names import get_taiwan_stock_name
-        db_name = get_taiwan_stock_name(ticker_num)
-        if db_name:
-            raw_name = f"{db_name} ({raw_name})"
-            
-    # Parse financials safely
-    financials = {
-        "ticker": ticker,
-        "company_name": raw_name,
-        "current_price": float(current_price),
-        "is_etf_proxy": is_etf,
-        "market_cap": info.get("marketCap"),
-        "pe_ratio": info.get("trailingPE"),
-        "forward_pe": info.get("forwardPE"),
-        "peg_ratio": info.get("pegRatio"),
-        "price_to_book": info.get("priceToBook"),
-        "profit_margin": info.get("profitMargins"),
-        "operating_margin": info.get("operatingMargins"),
-        "roe": info.get("returnOnEquity"),
-        "debt_to_equity": info.get("debtToEquity"),
-        "revenue_growth": info.get("revenueGrowth"),
-        "eps_growth": info.get("earningsGrowth"),
-        "free_cash_flow": info.get("freeCashflow"),
-        "fifty_day_sma": fast_info.get("fiftyDayAverage") or info.get("fiftyDayAverage"),
-        "two_hundred_day_sma": fast_info.get("twoHundredDayAverage") or info.get("twoHundredDayAverage"),
-        "recommendation_consensus": info.get("recommendationKey"),  # e.g., 'buy', 'strong_buy'
-        # Wall Street Analyst Targets
-        "analyst_target_mean": info.get("targetMeanPrice"),
-        "analyst_target_high": info.get("targetHighPrice"),
-        "analyst_target_low": info.get("targetLowPrice"),
-        "analyst_count": info.get("numberOfAnalystOpinions"),
-        "analyst_mean_score": info.get("recommendationMean"),
-        # ETF specific fields
-        "total_assets": info.get("totalAssets") or info.get("navPrice"),
-        "dividend_yield": info.get("yield") or info.get("trailingAnnualDividendYield"),
-        "nav_price": info.get("navPrice"),
-        "rsi_14": None,
-        "sma_20": None
-    }
+    try:
+        for r_info in REGIONS.values():
+            sec_config = r_info.get("sector_etfs", {}).get(ticker_clean)
+            if isinstance(sec_config, dict) and "is_etf" in sec_config:
+                return bool(sec_config["is_etf"])
+    except Exception:
+        pass
+        
+    # Tier 3: Static format rules (e.g. Taiwan tickers, US indices)
+    if ticker_clean.endswith(".TW") or ticker_clean.endswith(".TWO"):
+        ticker_num = ticker_clean.split(".")[0]
+        if ticker_num.isdigit():
+            # Taiwan ETFs normally start with "00", e.g., 0050, 0056, 00632R (though some have letters, prefix starts with 00)
+            if ticker_num.startswith("00"):
+                return True
+            elif len(ticker_num) == 4:
+                return False
+    elif ticker_clean.startswith("^"):
+        return True
+
+    # Tier 4: Default fallback
+    return False
+
+@retry_on_exception(tries=3, delay=2, backoff=2, exceptions=(requests.RequestException, ConnectionError, TimeoutError))
+def _get_stock_financials_raw(ticker: str) -> dict:
+    """Internal raw fundamentals fetcher with retries."""
+    ticker_clean = ticker.strip().upper()
+
+    # 1. Determine if this ticker is an ETF or index proxy (Single Source of Truth via is_etf_ticker)
+    is_etf = is_etf_ticker(ticker_clean)
+
+    t = yf.Ticker(ticker)
     
-    # Calculate technical indicators
-    tech = calculate_technical_metrics(ticker)
-    financials["rsi_14"] = tech["rsi_14"]
-    financials["sma_20"] = tech["sma_20"]
-    financials["atr_14"] = tech.get("atr_14")
-    financials["beta"] = tech.get("beta", 1.0)
-    
-    # Clean null values to standard Python None
-    for k, v in financials.items():
-        if pd.isna(v):
-            financials[k] = None
+    # Run all yfinance operations and calculations under silence_all to avoid dirtying logs
+    with silence_all():
+        try:
+            info = t.info or {}
+        except Exception:
+            info = {}
+        try:
+            fast_info = t.fast_info
+        except Exception:
+            fast_info = {}
+        
+        current_price = fast_info.get("lastPrice") or info.get("currentPrice") or info.get("regularMarketPrice")
+        if not current_price:
+            # Fallback to daily history
+            try:
+                hist = t.history(period="1d").dropna(subset=["Close"])
+                if not hist.empty:
+                    current_price = hist["Close"].iloc[-1]
+            except Exception:
+                pass
+                
+        if not current_price:
+            raise ValueError(f"No current price available for fundamentals of {ticker}")
             
-    return financials
+        # Get company name
+        raw_name = info.get("longName") or info.get("shortName") or ticker
+        if ticker.endswith(".TW") or ticker.endswith(".TWO"):
+            ticker_num = ticker.split(".")[0]
+            from core.tools.taiwan_stock_names import get_taiwan_stock_name
+            db_name = get_taiwan_stock_name(ticker_num)
+            if db_name:
+                raw_name = f"{db_name} ({raw_name})"
+                
+        # Parse financials safely
+        financials = {
+            "ticker": ticker,
+            "company_name": raw_name,
+            "current_price": float(current_price),
+            "is_etf_proxy": is_etf,
+            "market_cap": info.get("marketCap"),
+            "pe_ratio": info.get("trailingPE"),
+            "forward_pe": info.get("forwardPE"),
+            "peg_ratio": info.get("pegRatio"),
+            "price_to_book": info.get("priceToBook"),
+            "profit_margin": info.get("profitMargins"),
+            "operating_margin": info.get("operatingMargins"),
+            "roe": info.get("returnOnEquity"),
+            "debt_to_equity": info.get("debtToEquity"),
+            "revenue_growth": info.get("revenueGrowth"),
+            "eps_growth": info.get("earningsGrowth"),
+            "free_cash_flow": info.get("freeCashflow"),
+            "fifty_day_sma": fast_info.get("fiftyDayAverage") or info.get("fiftyDayAverage"),
+            "two_hundred_day_sma": fast_info.get("twoHundredDayAverage") or info.get("twoHundredDayAverage"),
+            "recommendation_consensus": info.get("recommendationKey"),  # e.g., 'buy', 'strong_buy'
+            # Wall Street Analyst Targets
+            "analyst_target_mean": info.get("targetMeanPrice"),
+            "analyst_target_high": info.get("targetHighPrice"),
+            "analyst_target_low": info.get("targetLowPrice"),
+            "analyst_count": info.get("numberOfAnalystOpinions"),
+            "analyst_mean_score": info.get("recommendationMean"),
+            # ETF specific fields
+            "total_assets": info.get("totalAssets") or info.get("navPrice"),
+            "dividend_yield": info.get("yield") or info.get("trailingAnnualDividendYield"),
+            "nav_price": info.get("navPrice"),
+            "rsi_14": None,
+            "sma_20": None,
+            # Business classification & summary for enhanced LLM context
+            "sector": info.get("sector"),
+            "industry": info.get("industry"),
+            "long_business_summary": info.get("longBusinessSummary")
+        }
+        
+        # Calculate technical indicators
+        tech = calculate_technical_metrics(ticker)
+        financials["rsi_14"] = tech["rsi_14"]
+        financials["sma_20"] = tech["sma_20"]
+        financials["atr_14"] = tech.get("atr_14")
+        financials["beta"] = tech.get("beta", 1.0)
+        
+        # Clean null values to standard Python None
+        for k, v in financials.items():
+            if pd.isna(v):
+                financials[k] = None
+                
+        return financials
 
 def get_stock_financials(ticker: str) -> dict:
     """Retrieves extensive fundamental metrics for the target stock ticker (safe fallback). Adapts automatically for ETFs."""
@@ -355,8 +430,8 @@ def get_stock_financials(ticker: str) -> dict:
         if data:
             save_to_cache(CACHE_DIR, cache_key, data)
         return data
-    except Exception as e:
-        print(f"Error fetching stock financials for {ticker} after permanent failures: {e}")
+    except Exception:
+        print(f"[!] Warning: {ticker} 財務資料獲取失敗，可能已下市或資料缺失。")
         return {}
 
 @retry_on_exception(tries=3, delay=2, backoff=2)

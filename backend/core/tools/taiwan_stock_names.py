@@ -79,22 +79,27 @@ def get_taiwan_stock_name(ticker_or_code: str) -> str:
             return row[0] if isinstance(row, tuple) else row.get("chinese_name")
 
     # 2. Not found: trigger sync of TWSE/TPEx lists (checks weekly limit)
-    print(f"[*] Stock code {code} not found in database. Triggering dynamic TWSE/TPEx sync...")
-    try:
-        sync_taiwan_stock_names()
-        # Query again after sync
-        with db_session() as conn:
-            cursor = conn.cursor()
-            execute_sql(cursor,
-                "SELECT chinese_name FROM taiwan_stock_names WHERE stock_code = ?",
-                "SELECT chinese_name FROM taiwan_stock_names WHERE stock_code = %s",
-                (code,)
-            )
-            row = cursor.fetchone()
-            if row:
-                return row[0] if isinstance(row, tuple) else row.get("chinese_name")
-    except Exception as e:
-        print(f"[!] Warning: Failed to sync Taiwan stock names from TWSE: {e}")
+    if not hasattr(get_taiwan_stock_name, "_sync_attempted"):
+        get_taiwan_stock_name._sync_attempted = False
+
+    if not get_taiwan_stock_name._sync_attempted:
+        get_taiwan_stock_name._sync_attempted = True
+        print(f"[*] Stock code {code} not found in database. Triggering dynamic TWSE/TPEx sync...")
+        try:
+            sync_taiwan_stock_names()
+            # Query again after sync
+            with db_session() as conn:
+                cursor = conn.cursor()
+                execute_sql(cursor,
+                    "SELECT chinese_name FROM taiwan_stock_names WHERE stock_code = ?",
+                    "SELECT chinese_name FROM taiwan_stock_names WHERE stock_code = %s",
+                    (code,)
+                )
+                row = cursor.fetchone()
+                if row:
+                    return row[0] if isinstance(row, tuple) else row.get("chinese_name")
+        except Exception as e:
+            print(f"[!] Warning: Failed to sync Taiwan stock names from TWSE: {e}")
         
     return None
 
@@ -261,13 +266,18 @@ def resolve_taiwan_ticker_locally(query_str: str) -> dict:
         return result
 
     # 3. Not found locally: trigger weekly sync
-    print(f"[*] Query '{query_str}' not found in local registry. Checking TWSE for updates...")
-    try:
-        # If we synced within a week, this will print skip notice and return immediately
-        sync_taiwan_stock_names()
-        # Try local search again after sync
-        return _query_local_db(query_str)
-    except Exception as e:
-        print(f"[!] Warning: Failed to dynamically sync TWSE names: {e}")
+    if not hasattr(resolve_taiwan_ticker_locally, "_sync_attempted"):
+        resolve_taiwan_ticker_locally._sync_attempted = False
+
+    if not resolve_taiwan_ticker_locally._sync_attempted:
+        resolve_taiwan_ticker_locally._sync_attempted = True
+        print(f"[*] Query '{query_str}' not found in local registry. Checking TWSE for updates...")
+        try:
+            # If we synced within a week, this will print skip notice and return immediately
+            sync_taiwan_stock_names()
+            # Try local search again after sync
+            return _query_local_db(query_str)
+        except Exception as e:
+            print(f"[!] Warning: Failed to dynamically sync TWSE names: {e}")
         
     return None

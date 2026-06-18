@@ -31,5 +31,5 @@ class QuantScreener:
             etf_ticker, region=region, financials=financials, weekly_return=weekly_return
         )
 
-    def generate_report(self, report_date: str) -> tuple:
-        return ScreenerFactory.get_screener().generate_report(report_date)
+    def generate_report(self, report_date: str, sector_rankings: list = None) -> tuple:
+        return ScreenerFactory.get_screener().generate_report(report_date, sector_rankings=sector_rankings)

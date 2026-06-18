@@ -38,6 +38,8 @@ CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 # API Keys
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
+DEEPSEEK_API_BASE = os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com")
 
 # LINE Messaging API Configuration
 LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
@@ -91,9 +93,26 @@ if SECTORS_JSON_PATH.exists():
 else:
     print(f"[!] Warning: {SECTORS_JSON_PATH} not found. Running with empty sector list.")
 
-# AI Settings
-DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"  # Highly efficient for agent loops
-WRITER_GEMINI_MODEL = "gemini-2.5-flash"   # Standardized to Flash to respect free tier daily limits
+# ==============================================================================
+# AI Settings & LLM Configuration
+# ==============================================================================
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini").lower()
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+
+# DeepSeek settings
+DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash")
+# thinking mode for DeepSeek: "enabled" or "disabled"
+DEEPSEEK_THINKING = os.getenv("DEEPSEEK_THINKING", "disabled").lower()
+
+# Determine active model based on LLM_PROVIDER
+if LLM_PROVIDER == "deepseek":
+    DEFAULT_MODEL = DEEPSEEK_MODEL
+    WRITER_MODEL = DEEPSEEK_MODEL
+else:
+    DEFAULT_MODEL = GEMINI_MODEL
+    WRITER_MODEL = GEMINI_MODEL
+
+
 TEMPERATURE = 0.2
 
 # Pipeline Limits (for API quota management)

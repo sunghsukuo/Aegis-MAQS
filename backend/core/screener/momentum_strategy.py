@@ -24,7 +24,9 @@ class MomentumScreener(BaseScreener):
         for ticker in tickers:
             try:
                 t = yf.Ticker(ticker)
-                hist = t.history(period="1mo").dropna(subset=["Close"])
+                from core.tools.yahoo_finance import silence_all
+                with silence_all():
+                    hist = t.history(period="1mo").dropna(subset=["Close"])
                 if hist.empty or len(hist) < 20:
                     failed_liquidity += 1
                     continue
@@ -58,7 +60,9 @@ class MomentumScreener(BaseScreener):
                 # Get the company name
                 name = ticker
                 try:
-                    name = t.info.get("longName", ticker)
+                    from core.tools.yahoo_finance import silence_all
+                    with silence_all():
+                        name = t.info.get("longName", ticker)
                 except Exception:
                     pass
                 

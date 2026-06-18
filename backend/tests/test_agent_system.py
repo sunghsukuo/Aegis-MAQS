@@ -79,9 +79,9 @@ def test_gemini_api():
         
     try:
         from core.agents.base_agent import BaseAgent
-        from core.config import DEFAULT_GEMINI_MODEL
-        print_blue(f"正在發送測試 Prompts 給 {DEFAULT_GEMINI_MODEL} 模型...")
-        agent = BaseAgent(name="TestAgent", role="Tester", system_instruction="你是一個測試助手，請只回覆 'Hello World'")
+        from core.config import DEFAULT_MODEL
+        print_blue(f"正在發送測試 Prompts 給 {DEFAULT_MODEL} 模型...")
+        agent = BaseAgent(name="TestAgent", role="Tester", system_instruction="你是一個測試助手，請只回覆 'Hello World'", register_db=False)
         response = agent.run("哈囉，請進行連線測試")
         
         if "Agent encountered error" in response:

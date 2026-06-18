@@ -37,6 +37,10 @@ def get_cached_data(cache_dir, cache_key: str, ttl_hours: int = 12) -> dict:
     from datetime import datetime, timedelta
     from pathlib import Path
     
+    # Bypass cache during backtests to prevent lookahead bias from real-time cached files
+    if os.environ.get("AEGIS_IN_BACKTEST") == "1":
+        return None
+        
     cache_file = Path(cache_dir) / f"{cache_key}.json"
     if not cache_file.exists():
         return None

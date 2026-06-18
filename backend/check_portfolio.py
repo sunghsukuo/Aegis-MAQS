@@ -195,15 +195,36 @@ def run_portfolio_check(report_date: str, regions: list = None):
                 )
                 notifier.send_message(msg)
             else:
-                # Still active, check and apply trailing stop (breakeven) protection!
+                # Still active, check and apply trailing stop (breakeven & chandelier) protection!
                 tech_metrics = yf_tool.calculate_technical_metrics(ticker)
                 atr_14 = tech_metrics.get("atr_14")
                 if atr_14:
-                    from core.risk.trailing_stop import check_and_apply_breakeven_stop
-                    updated = check_and_apply_breakeven_stop(rec, current_price, atr_14)
-                    if updated:
+                    from core.risk.trailing_stop import check_and_apply_breakeven_stop, check_and_apply_chandelier_stop
+                    
+                    # 1. Check breakeven stop
+                    updated_be = check_and_apply_breakeven_stop(rec, current_price, atr_14)
+                    if updated_be:
                         rec["stop_loss"] = recommend_price
                         stop_loss = recommend_price
+                        
+                    # 2. Extract stock's beta from cache for Chandelier stop
+                    stock_beta = 1.0
+                    try:
+                        import json
+                        from core.config import CACHE_DIR
+                        cache_file = CACHE_DIR / f"financials_{ticker}.json"
+                        if cache_file.exists():
+                            with open(cache_file, "r", encoding="utf-8") as f:
+                                cache_data = json.load(f)
+                                stock_beta = cache_data.get("beta", 1.0) or 1.0
+                    except Exception:
+                        pass
+                        
+                    # 3. Check Chandelier trailing stop
+                    macro_regime = rec.get("macro_regime")
+                    updated_ch = check_and_apply_chandelier_stop(rec, current_price, atr_14, stock_beta, macro_regime)
+                    if updated_ch:
+                        stop_loss = rec["stop_loss"]
                         
                 # Still active, calculate and update current unrealized ROI & PnL
                 shares = rec.get("shares", 0.0)
@@ -321,13 +342,13 @@ def run_portfolio_check(report_date: str, regions: list = None):
                 else:
                     # Send LINE Recovery message if it transitioned from Triggered to Normal
                     if previously_triggered:
-                        print_success(f"✅ [風控恢復] {curr} 帳戶已回復至動態警戒線以下！")
+                        print_success(f"✅ [風控解除] {curr} 帳戶已回復至動態警戒線以下！")
                         recovery_msg = (
                             f"✅ 【風控解除·沙盒資產淨值與回撤已回復安全區間】\n"
                             f"================================\n"
                             f"發送時間：{datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n"
                             f"🎉 系統已偵測到風控指標已回復至動態警戒線以下！\n"
-                            f"• {region_filter} 歷史最大回撤 (MDD) 降至 {current_mdd*100:.2f}% (動態警戒: {mdd_limit*100:.1f}%)\n"
+                            f"• {region_filter} 歷史最大回撤 (MDD) 達 {current_mdd*100:.2f}% (動態警戒: {mdd_limit*100:.1f}%)\n"
                             f"• {region_filter} 資產自峰值回降 降至 {current_drop*100:.2f}% (動態警戒: {mdd_limit*100:.1f}%)\n\n"
                             f"💰 當前資產淨值: {total_nav:,.2f} {curr}\n"
                             f"🛡️ 【風控恢復對策】\n"

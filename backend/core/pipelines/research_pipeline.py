@@ -130,14 +130,19 @@ def research_and_track_asset(
                 except ValueError:
                     pass
                     
-    if suggested_weight is None:
-        if rating == "Strong Buy": suggested_weight = 0.25
-        elif rating == "Buy": suggested_weight = 0.15
-        elif rating == "Hold": suggested_weight = 0.05
-        elif rating == "Sell": suggested_weight = 0.0
-        else: suggested_weight = 0.0
+    # Option A: Quant decides, LLM adjusts weight (Hold is allocated a starter 5% weight instead of being blocked)
+    if rating == "Hold":
+        if suggested_weight is not None:
+            suggested_weight = min(suggested_weight, 0.05)
+        else:
+            suggested_weight = 0.05
+    elif rating == "Strong Buy":
+        if suggested_weight is None: suggested_weight = 0.25
+    elif rating == "Buy":
+        if suggested_weight is None: suggested_weight = 0.15
+    else: # Sell or Avoid
+        suggested_weight = 0.0
 
-        
     invested_amount = 0.0
     shares = 0.0
     rec_id = None
@@ -147,14 +152,14 @@ def research_and_track_asset(
     if save_to_db:
         if is_weekly_pipeline:
             should_save = True
-        elif rating in ["Buy", "Strong Buy"]:
+        elif rating in ["Buy", "Strong Buy", "Hold"]:
             should_save = True
             
     if should_save:
-        if rating in ["Buy", "Strong Buy"]:
+        if rating in ["Buy", "Strong Buy", "Hold"]:
             from core.agents.budget_agent import BudgetAgent
             budget_agent = BudgetAgent()
-            invested_amount, shares = budget_agent.allocate_budget(ticker, region_code, curr_price, custom_weight=suggested_weight)
+            invested_amount, shares = budget_agent.allocate_budget(ticker, region_code, curr_price, custom_weight=suggested_weight, report_date=report_date)
         
         reason = custom_recommend_reason or f"Aegis-MAQS 自動分析。當前大盤狀態: {macro_regime}。"
         try:
@@ -812,11 +817,11 @@ def run_realtime_query(query_str: str, track_option: bool, report_date: str):
         query_dir = Path(DEFAULT_REPORTS_DIR).parent / "query"
         query_dir.mkdir(parents=True, exist_ok=True)
         
-        query_md_content = f"""# 🎯 Aegis-MAQS 智慧投資決策報告 - {ticker} ({display_name})
+        query_md_content = f"""# Aegis-MAQS 智慧投資決策報告 - {ticker} ({display_name})
 *   **分析日期**: {report_date}
 *   **國家區域**: {region_display}
 
-## 🎯 第一章：智慧投資決策與交易指令概要
+## 第一章：智慧投資決策與交易指令概要
 
 | 項目 | 數值 |
 | :--- | :--- |
@@ -832,13 +837,13 @@ def run_realtime_query(query_str: str, track_option: bool, report_date: str):
 
 ---
 
-## 🏦 第二章：投行量化估值模型報告 (Equity Valuation Engine Report)
+## 第二章：投行量化估值模型報告 (Equity Valuation Engine Report)
 
 {valuation_report}
 
 ---
 
-## 💡 第三章：大模型深度基本面分析與決策修正 (LLM Report)
+## 第三章：大模型深度基本面分析與決策修正 (LLM Report)
 
 {stock_report}
 """
@@ -1184,13 +1189,22 @@ def run_screen_targets_phase(regions_list: list, report_date: str, state: dict):
                 print_info(f"[{region_name}] 板塊 {etf_ticker} 配置為直接投資 ETF 標的 (target_type: proxy)。")
             else:
                 representative_stocks = yf_tool.screen_sector_candidates(etf_ticker, region=r_code, macro_regime=macro_regime, price_regime=price_regime)
-                stocks_to_analyze = max(1, MAX_STOCKS_PER_REGION - stocks_screened)
-                stocks_to_analyze = min(stocks_to_analyze, 2)
-                target_stocks = representative_stocks[:stocks_to_analyze]
-                for s in target_stocks:
-                    s["target_type"] = "constituents"
-                    s["etf_ticker"] = etf_ticker
-                print_info(f"[{region_name}] 板塊 {etf_ticker} 配置為投資旗下成分股 (target_type: constituents)。")
+                if not representative_stocks:
+                    target_stocks = [{
+                        "ticker": etf_ticker,
+                        "name": f"{sector_config.get('name', etf_ticker)}",
+                        "target_type": "proxy",
+                        "etf_ticker": etf_ticker
+                    }]
+                    print_warning(f"[{region_name}] 板塊 {etf_ticker} 所有成分股均未通過量化篩選！自動啟動 B 方案：遞補為直接投資板塊 ETF 本身 (target_type: proxy) 以獲取板塊 Beta 收益。")
+                else:
+                    stocks_to_analyze = max(1, MAX_STOCKS_PER_REGION - stocks_screened)
+                    stocks_to_analyze = min(stocks_to_analyze, 2)
+                    target_stocks = representative_stocks[:stocks_to_analyze]
+                    for s in target_stocks:
+                        s["target_type"] = "constituents"
+                        s["etf_ticker"] = etf_ticker
+                    print_info(f"[{region_name}] 板塊 {etf_ticker} 配置為投資旗下成分股 (target_type: constituents)。")
                 
             state["analysis"][r_code]["target_stocks"].extend(target_stocks)
             stocks_screened += len(target_stocks)
@@ -1266,7 +1280,8 @@ def run_analyze_stocks_phase(regions_list: list, report_date: str, state: dict):
             analyzed_summary.append({
                 "ticker": ticker,
                 "name": name,
-                "rating": res["rating"]
+                "rating": res["rating"],
+                "etf_ticker": etf_ticker
             })
             print_success(f"標的 {ticker} 推薦參數與預算已成功寫入回測帳本！(現價: {res['financials'].get('current_price', 0.0):.2f} | 分配預算: {res['invested_amount']:.2f} | 股數: {res['shares']:.2f})")
             
@@ -1303,13 +1318,82 @@ def run_weekly_report_phase(regions_list: list, report_date: str, timestamp_suff
             candidate_summary += "本週所有進行深度基本面分析之候選標的與評級如下：\n"
             for item in analyzed_summary_list:
                 rating_label = "買入 Buy" if item['rating'] == "Buy" else "強烈買入 Strong Buy" if item['rating'] == "Strong Buy" else "持有 Hold" if item['rating'] == "Hold" else "避免買入 Avoid"
-                candidate_summary += f"- {item['name']} ({item['ticker']}): 最終分析評級為【{rating_label}】。\n"
+                etf_lbl = f"（隸屬板塊/ETF: {item['etf_ticker']}）" if item.get('etf_ticker') else ""
+                candidate_summary += f"- {item['name']} ({item['ticker']}) {etf_lbl}: 最終分析評級為【{rating_label}】。\n"
         else:
             candidate_summary = "本週無待分析之個股。"
             
         if not mac_rep or not mkt_rep:
             raise ValueError(f"區域 {r_code} 缺少宏觀或板塊分析數據，請重跑 analyze_macro 與 analyze_sectors！")
             
+        # Build transaction execution ledger details for the WriterAgent
+        buys_summary = []
+        sells_summary = []
+        try:
+            with db.db_session() as conn:
+                cursor = conn.cursor()
+                db.execute_sql(cursor,
+                    "SELECT * FROM recommendations WHERE (report_date = ? OR close_date = ?) AND region = ?",
+                    "SELECT * FROM recommendations WHERE (report_date = %s OR close_date = %s) AND region = %s",
+                    (report_date, report_date, r_code)
+                )
+                rows = cursor.fetchall()
+                db_recs = [dict(r) for r in rows]
+                
+            for rec in db_recs:
+                ticker = rec["ticker"]
+                name = rec["company_name"]
+                price_symbol = "$" if (".TW" not in ticker and ".TWO" not in ticker) else "NT$"
+                
+                # Check if it was bought (created on report_date)
+                if rec["report_date"] == report_date:
+                    rating = rec["rating"]
+                    rec_price = rec["recommend_price"]
+                    shares = rec["shares"]
+                    amount = rec["invested_amount"]
+                    
+                    # If shares > 0, it means we actually had capital and executed a buy
+                    if shares > 0:
+                        weight_pct = 5.0 if rating == "Hold" else 15.0 if rating == "Buy" else 25.0 if rating == "Strong Buy" else 0.0
+                        buys_summary.append(
+                            f"- **買入建倉 {name} ({ticker})**:\n"
+                            f"  - 評級: {rating}\n"
+                            f"  - 交易單價: {price_symbol}{rec_price:.2f}\n"
+                            f"  - 買入股數: {shares:.1f} 股\n"
+                            f"  - 投入金額: {price_symbol}{amount:.2f}\n"
+                            f"  - 當前持倉權重: {weight_pct:.1f}%"
+                        )
+                
+                # Check if it was sold (closed on report_date)
+                if rec["close_date"] == report_date:
+                    rec_price = rec["recommend_price"]
+                    close_price = rec["close_price"]
+                    shares = rec["shares"]
+                    amount = rec["invested_amount"]
+                    pnl = rec["pnl"]
+                    perf = rec["performance"] * 100
+                    
+                    action = "停損避險平倉 (Stop Loss)" if perf < 0 else "達到目標價獲利平倉 (Take Profit)"
+                    sells_summary.append(
+                        f"- **賣出平倉 {name} ({ticker})**:\n"
+                        f"  - 執行類型: {action}\n"
+                        f"  - 買入單價: {price_symbol}{rec_price:.2f}\n"
+                        f"  - 平倉單價: {price_symbol}{close_price:.2f}\n"
+                        f"  - 交易股數: {shares:.1f} 股\n"
+                        f"  - 實現盈虧: {price_symbol}{pnl:+.2f} ({perf:+.2f}%)"
+                    )
+        except Exception as query_ex:
+            print(f"[!] Warning: Failed to query recommendations for report: {query_ex}")
+
+        portfolio_ledger_context = "【本週實戰帳戶交易與持倉調整明細】\n"
+        if buys_summary or sells_summary:
+            if buys_summary:
+                portfolio_ledger_context += "本週買入交易紀錄：\n" + "\n".join(buys_summary) + "\n"
+            if sells_summary:
+                portfolio_ledger_context += "\n本週賣出平倉紀錄：\n" + "\n".join(sells_summary) + "\n"
+        else:
+            portfolio_ledger_context += "本週帳戶無進行任何買入或平倉交易，維持原有持倉。\n"
+
         print_info(f"✍ 正在調度總編輯代理人 (WriterAgent) 進行【{region_name}】專用策略週報撰寫...")
         writer_agent = WriterAgent()
         time.sleep(3)
@@ -1322,7 +1406,8 @@ def run_weekly_report_phase(regions_list: list, report_date: str, timestamp_suff
             market_reports=[mkt_rep],
             stock_reports=[stk_rep or "本週暫無推薦股票分析。"],
             reflection_report=reflection_directives,
-            candidate_summary=candidate_summary
+            candidate_summary=candidate_summary,
+            portfolio_ledger=portfolio_ledger_context
         )
         print_info(f"[{region_name}] 總編輯生成的原始週報長度: {len(final_markdown)} 字元。")
         
@@ -1352,7 +1437,8 @@ def run_weekly_report_phase(regions_list: list, report_date: str, timestamp_suff
             
             if REPORT_LANGUAGE == "EN":
                 r_lbl = "US Market" if r_code == "US" else "Taiwan Market"
-                region_title = f"# 🌍 Weekly {r_lbl} Investment Strategy & Multi-Agent Advisory Report {report_date}"
+                region_title = f"# Weekly {r_lbl} Investment Strategy & Multi-Agent Advisory Report {report_date}"
+                final_markdown = final_markdown.replace(f"# Weekly Global Investment Strategy & Multi-Agent Advisory Report {report_date}", region_title)
                 final_markdown = final_markdown.replace(f"# 🌍 Weekly Global Investment Strategy & Multi-Agent Advisory Report {report_date}", region_title)
                 if not final_markdown.startswith("#"):
                     final_markdown = f"{region_title}\n{date_range_text}\n" + final_markdown
@@ -1361,7 +1447,8 @@ def run_weekly_report_phase(regions_list: list, report_date: str, timestamp_suff
                     final_markdown = f"{region_title}\n{date_range_text}\n" + "\n".join(lines[1:])
             else:
                 r_lbl = "美股" if r_code == "US" else "台股"
-                region_title = f"# 🌍 每週{r_lbl}投資策略與多維度決策週報 {report_date}"
+                region_title = f"# 每週{r_lbl}投資策略與多維度決策週報 {report_date}"
+                final_markdown = final_markdown.replace(f"# 每週全球投資策略與多維度決策週報 {report_date}", region_title)
                 final_markdown = final_markdown.replace(f"# 🌍 每週全球投資策略與多維度決策週報 {report_date}", region_title)
                 if not final_markdown.startswith("#"):
                     final_markdown = f"{region_title}\n{date_range_text}\n" + final_markdown
@@ -1392,45 +1479,51 @@ def run_screener_report_phase(regions_list: list, report_date: str, timestamp_su
     print_info("==================================================")
     
     screener_instance = yf_tool.get_screener_instance()
-    screener_instance.clear_history()
     
-    history_loaded = False
     for r_code in regions_list:
+        region_name = REGIONS[r_code]["name"]
+        screener_instance.clear_history()
+        
+        history_loaded = False
+        sector_rankings = []
         if "analysis" in state and r_code in state["analysis"]:
             r_analysis = state["analysis"][r_code]
+            sector_rankings = r_analysis.get("sector_rankings", [])
             if "screener_session_history" in r_analysis:
                 screener_instance.session_history.extend(r_analysis["screener_session_history"])
                 history_loaded = True
                 
-    if "screener_session_history" in state:
-        screener_instance.session_history.extend(state["screener_session_history"])
-        history_loaded = True
-        
-    if not history_loaded:
-        print_warning("快取狀態中未找到任何選股歷史紀錄，將跳過或生成空的選股報告。")
-        
-    try:
-        screener_md, screener_html = screener_instance.generate_report(report_date)
-        if screener_md:
-            screener_filename = f"{report_date}_{timestamp_suffix}_screener_report_{REPORT_LANGUAGE}"
-            db.save_report(screener_filename, regions_list, screener_md, screener_html)
-            
-            s_md_path = daily_reports_dir / f"{screener_filename}.md"
-            s_html_path = daily_reports_dir / f"{screener_filename}.html"
-            
-            with open(s_md_path, "w", encoding="utf-8") as f:
-                f.write(screener_md)
-            with open(s_html_path, "w", encoding="utf-8") as f:
-                f.write(screener_html)
+        if "screener_session_history" in state:
+            filtered_history = [item for item in state["screener_session_history"] if item.get("region") == r_code]
+            if filtered_history:
+                screener_instance.session_history.extend(filtered_history)
+                history_loaded = True
                 
-            print_success(f"🎉 恭喜！量化選股掃描報告已成功產出並存檔！")
-            print_success(f"💾 Markdown 存檔路徑：{s_md_path}")
-            print_success(f"💾 HTML 存檔路徑：{s_html_path}")
-            print_success(f"💾 報告已成功同步寫入 {DB_TYPE.upper()} 數據庫。")
-        else:
-            print_warning("本次執行未包含 any 選股歷史紀錄，跳過選股報告生成。")
-    except Exception as e:
-        print_error(f"產出量化選股報告時發生錯誤: {e}")
+        if not history_loaded:
+            print_warning(f"[{region_name}] 快取狀態中未找到選股歷史紀錄，將跳過或生成空的選股報告。")
+            
+        try:
+            screener_md, screener_html = screener_instance.generate_report(report_date, sector_rankings=sector_rankings)
+            if screener_md:
+                screener_filename = f"{report_date}_{timestamp_suffix}_screener_report_{r_code}_{REPORT_LANGUAGE}"
+                db.save_report(screener_filename, [r_code], screener_md, screener_html)
+                
+                s_md_path = daily_reports_dir / f"{screener_filename}.md"
+                s_html_path = daily_reports_dir / f"{screener_filename}.html"
+                
+                with open(s_md_path, "w", encoding="utf-8") as f:
+                    f.write(screener_md)
+                with open(s_html_path, "w", encoding="utf-8") as f:
+                    f.write(screener_html)
+                    
+                print_success(f"🎉 恭喜！【{region_name}】量化選股掃描報告已成功產出並存檔！")
+                print_success(f"💾 Markdown 存檔路徑：{s_md_path}")
+                print_success(f"💾 HTML 存檔路徑：{s_html_path}")
+                print_success(f"💾 報告已成功同步寫入 {DB_TYPE.upper()} 數據庫。")
+            else:
+                print_warning(f"[{region_name}] 本次執行未包含任何選股歷史紀錄，跳過選股報告生成。")
+        except Exception as e:
+            print_error(f"[{region_name}] 產出量化選股報告時發生錯誤: {e}")
 
 def run_notify_phase(regions_list: list, report_date: str, state: dict):
     print_info("==================================================")

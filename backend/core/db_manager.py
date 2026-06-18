@@ -442,7 +442,11 @@ def init_db():
             "SELECT COUNT(*) FROM capital_ledger"
         )
         row = cursor.fetchone()
-        count = row[0] if isinstance(row, tuple) else row.get("COUNT(*)") or row.get("count(*)") or list(row.values())[0]
+        if isinstance(row, tuple):
+            count = row[0]
+        else:
+            row_dict = dict(row)
+            count = row_dict.get("COUNT(*)") or row_dict.get("count(*)") or list(row_dict.values())[0]
         if count == 0:
             # Seed USD: Available 100k, Reserved 20k
             execute_sql(cursor,

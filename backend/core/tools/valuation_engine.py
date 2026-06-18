@@ -8,7 +8,8 @@ from datetime import datetime, timedelta
 # Import database and config
 from core.db_manager import db_session, execute_sql
 from core.tools.utils import get_cached_data, retry_on_exception
-from core.config import CACHE_DIR, GEMINI_API_KEY, DEFAULT_GEMINI_MODEL
+from core.config import CACHE_DIR, GEMINI_API_KEY, DEEPSEEK_API_KEY
+from core.agents.base_agent import BaseAgent
 
 def get_df_row(df, keys):
     """Safely extracts a row from a pandas DataFrame by checking multiple potential index keys."""
@@ -259,37 +260,74 @@ class ValuationEngine:
             print(f"[!] 查詢本地資料庫同業時發生錯誤: {e}")
             
         # 2. Leverage Large Language Model to query global/regional competitors (Dynamic & Smart)
-        if GEMINI_API_KEY:
+        if GEMINI_API_KEY or DEEPSEEK_API_KEY:
             try:
                 company_name = financials.get("company_name", ticker)
-                client = genai.Client(api_key=GEMINI_API_KEY)
+                sector = financials.get("sector")
+                industry = financials.get("industry")
+                summary = financials.get("long_business_summary")
+                
+                company_context = f"產業板塊: {sector or '未提供'}\n行業類別: {industry or '未提供'}"
+                if summary:
+                    company_context += f"\n業務簡介: {summary[:600]}..."
+                
+                db_peers_context = ""
+                if db_peers:
+                    db_peers_context = "本地資料庫參考同業候選名單：\n" + "\n".join([f"- {p['ticker']} ({p['name']})" for p in db_peers])
+                
+                agent = BaseAgent(
+                    name="ValuationHelper",
+                    role="Financial Competitor Identifier",
+                    system_instruction="你是一個專業的財經分析助手，專門識別上市公司的競爭對手。請只回覆合法的 JSON 資料。",
+                    register_db=False
+                )
                 prompt = f"""
-請列出與股票代號 {ticker} (名稱: {company_name}) 屬於相同產業、且業務最相似的全球或區域前 4 檔競爭對手或同業。
+請為股票代號 {ticker} (公司名稱: {company_name}) 識別並篩選出 4 檔業務最相似、最具可比性的全球或區域競爭對手（同業）。
 
-請只回傳一個 JSON 陣列，不包含 any Markdown tags (例如不要 ```json 或是 ```)，格式如下：
+【目標公司資訊】
+股票代號: {ticker}
+公司名稱: {company_name}
+{company_context}
+
+{db_peers_context}
+
+【篩選與回傳規範】
+1. **必須為「正常上市交易中」的股票**：絕對不要推薦已下市、已合併、或更名的歷史股票代號！
+   - 例如：台灣日月光請推薦 `3711.TW` (日月光投控)，絕對不能推薦已下市的 `2311.TW`。
+2. **商業模式與價值鏈對齊 (最重要)**：
+   - 同業必須與目標公司具有**相同或極度相似的商業模式與產業定位**（如：代工廠 vs 代工廠；IC設計 vs IC設計；晶圓代工 vs 晶圓代工；品牌廠 vs 品牌廠）。
+   - **絕對不要混淆產業鏈上下游或客戶**。例如：
+     - 若目標公司是代工廠（如鴻海 2317.TW），同業**必須**是其他電子代工/組裝廠（如廣達、和碩、緯創），**絕對不可**將其重要客戶（如 Apple）或上游晶片商（如 Qualcomm）列為同業，因為其利潤率、商業模式與估值倍數完全不同。
+     - 若目標公司是晶圓代工廠（如台積電 2330.TW），同業應為聯電、Intel、Samsung，**絕對不可**將其客戶（如 Nvidia, Apple）或設備供應商（如 ASML）列為同業。
+3. **正確同業範例參考 (Few-Shot)**：
+   - 鴻海 (2317.TW) 的正確同業應為：廣達 (2382.TW)、和碩 (4938.TW)、緯創 (3231.TW)、英業達 (2356.TW)。
+   - 台積電 (2330.TW) 的正確同業應為：聯電 (2303.TW)、Intel (INTC)、Samsung (005930.KS)。
+4. **優先參考本地候選名單**：你可以參考「本地資料庫參考同業候選名單」，但如果該名單內的公司不符合上述「商業模式對齊」原則（例如本地分類過於廣泛），請**果斷排除並尋找更精準的全球/區域同業**。
+5. **回傳格式**：請只回傳一個標準 JSON 陣列，不包含 ```json 或 ``` 等 Markdown 標記，格式如下：
 [
   {{"ticker": "同業代號", "name": "同業名稱"}}
 ]
 
-同業代號格式說明 (必須與 Yahoo Finance Ticker 對齊)：
+同業代號格式說明 (必須與 Yahoo Finance Ticker 一致)：
 - 美股：直接使用 Ticker (例如 INTC, NVDA, AMD, QCOM)
 - 台股：上市代號加上 .TW (例如 2303.TW)，上櫃代號加上 .TWO (例如 5274.TWO)
-- 韓股：代號加上 .KS (例如 三星電子為 005930.KS)
+- 韓股：代號加上 .KS (例如 005930.KS)
 - 其他市場比照 Yahoo Finance 標準代碼格式。
-
-請務必挑選業務上最直接的競爭對手。
 """
-                response = client.models.generate_content(
-                    model=DEFAULT_GEMINI_MODEL,
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        temperature=0.1,
-                        response_mime_type="application/json"
-                    )
-                )
-                if response and response.text:
+                response_text = agent.run(prompt)
+                if response_text:
                     import json
-                    llm_peers = json.loads(response.text.strip())
+                    clean_text = response_text.strip()
+                    # Defensive parsing to strip markdown backticks if any
+                    if clean_text.startswith("```"):
+                        lines = clean_text.splitlines()
+                        if lines[0].startswith("```"):
+                            lines = lines[1:]
+                        if lines and lines[-1].startswith("```"):
+                            lines = lines[:-1]
+                        clean_text = "\n".join(lines).strip()
+                    
+                    llm_peers = json.loads(clean_text)
                     if isinstance(llm_peers, list):
                         valid_llm_peers = []
                         for p in llm_peers:
@@ -490,7 +528,7 @@ class ValuationEngine:
         
         # 4. Format Report
         report = []
-        report.append(f"### 🏦 投資銀行級別量化估值模型報告 ({ticker})")
+        report.append(f"## 投資銀行級別量化估值模型報告 ({ticker})")
         
         # Helper to format large numbers
         def fmt_money(val):
@@ -501,7 +539,7 @@ class ValuationEngine:
             return f"{val:,.2f} {currency}"
 
         # DCF Output
-        report.append("#### 1. 5年期現金流量折現模型 (Discounted Cash Flow Model)")
+        report.append("### I. 5年期現金流量折現模型 (Discounted Cash Flow Model)")
         if dcf_res["status"] == "success":
             report.append(f"*   **WACC（加權平均資金成本）**: `{dcf_res['wacc']*100:.2f}%` ")
             report.append(f"    *   *股權權重/成本*: `{dcf_res['w_equity']*100:.1f}%` / `{dcf_res['cost_of_equity']*100:.2f}%` (CAPM 模型)")
@@ -519,7 +557,7 @@ class ValuationEngine:
             report.append(f"    *   *原因說明*: {dcf_res['message']} ")
             
         # Comps Output
-        report.append("\n#### 2. 同業乘數比較模型 (Comparables Analysis)")
+        report.append("\n### II. 同業乘數比較模型 (Comparables Analysis)")
         if comps_res["status"] == "success":
             report.append(f"*   **同行業競爭對手平均估值倍數**: ")
             if comps_res['avg_pe']:
@@ -544,12 +582,12 @@ class ValuationEngine:
             
         # Calibration Output
         if is_calibrated:
-            report.append("\n#### ⚠️ 估值模型極端偏離與自適應校準 (Valuation Calibration)")
+            report.append("\n### III. 估值模型極端偏離與自適應校準 (Valuation Calibration)")
             report.append(f"*   **偏離警告**: 絕對估值 (DCF) 與相對估值 (Comps) 偏離度達 `{deviation_pct:.2f}%`（已超過 50% 警戒閾值）。")
             report.append(f"*   **自適應調整**: 為防止個股 Beta 異常導致折現率失真，系統已將個股 Beta 值由 `{raw_beta:.2f}` 平滑校準為 `{calibrated_beta:.2f}`，並重新計算 DCF 估值，以合理化估值結果。")
 
         # Overall Summary
-        report.append("\n#### 3. 投行量化估值總結 (Valuation Summary)")
+        report.append("\n### IV. 投行量化估值總結 (Valuation Summary)")
         valid_valuations = []
         if dcf_res["status"] == "success":
             valid_valuations.append(dcf_res["intrinsic_value"])

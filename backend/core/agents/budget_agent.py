@@ -50,6 +50,8 @@ class BudgetAgent:
         try:
             import core.db_manager as db
             sectors = db.get_active_sectors(region)
+            if ticker.upper() in sectors:
+                return ticker.upper()
             for sec_code, sec_info in sectors.items():
                 if ticker in sec_info.get("constituents", []):
                     return sec_code
@@ -57,7 +59,7 @@ class BudgetAgent:
             pass
         return "UNKNOWN"
 
-    def allocate_budget(self, ticker: str, region: str, recommend_price: float, custom_weight: float = None) -> tuple:
+    def allocate_budget(self, ticker: str, region: str, recommend_price: float, custom_weight: float = None, report_date: str = None) -> tuple:
         """
         根據當前可用資金與分配比例，為單一推薦個股分配可投資總額與計算股數。
         優先採用 AI 代理人建議的權重，若無則採用預設比例。
@@ -72,6 +74,24 @@ class BudgetAgent:
         if get_risk_circuit_breaker(currency):
             print(f"[🛑 熔斷機制] 偵測到 {currency} 帳戶已啟動風控熔斷！全面凍結新標的 {ticker} 的買入預算配發。")
             return 0.0, 0.0
+            
+        # Check if the ticker is an ETF itself (skip earnings blocker for ETFs)
+        is_etf = False
+        try:
+            from core.tools.yahoo_finance import is_etf_ticker
+            is_etf = is_etf_ticker(ticker)
+        except Exception:
+            pass
+
+        if not is_etf:
+            # Check if the earnings announcement blocker is active (Earnings announcement block)
+            from core.risk.earnings_blocker import is_earnings_block_active
+            check_date = report_date or datetime.now().strftime("%Y-%m-%d")
+            is_blocked, next_earnings_date, biz_days = is_earnings_block_active(ticker, check_date)
+            if is_blocked:
+                print(f"[🛡️ Wind 風控] 偵測到 {ticker} 即將於 {next_earnings_date} 公布財報 (距離檢測日 {check_date} 僅 {biz_days} 個交易日)。")
+                print(f"            已啟動財報前交易禁令，凍結該標的新增買入預算。")
+                return 0.0, 0.0
             
         # 安全下限閥值：若可用資金過低，則不予分配新交易
         min_threshold = 100.0 if currency == "USD" else 3000.0
@@ -93,11 +113,11 @@ class BudgetAgent:
         # 決定此標的板塊的最大配置比率
         sector_code = self.get_ticker_sector(ticker, region)
         
-        # 美股板塊定義
+        # 美股板塊定義 (作為降級備用)
         is_tech_us = sector_code in ["XLK", "XLC"]
         is_defensive_us = sector_code in ["XLP", "XLU", "XLV"]
         
-        # 台股板塊定義 (對應 0050.TW 技術成分股與防守股)
+        # 台股板塊定義 (作為降級備用，對應 0050.TW 技術成分股與防守股)
         tech_tw_tickers = {"2330.TW", "2454.TW", "2317.TW", "2308.TW", "2357.TW", "2382.TW", "3231.TW", "3711.TW"}
         defensive_tw_tickers = {"1216.TW", "2412.TW", "2912.TW"}
         is_tech_tw = ticker in tech_tw_tickers
@@ -106,21 +126,76 @@ class BudgetAgent:
         is_tech = is_tech_us or is_tech_tw
         is_defensive = is_defensive_us or is_defensive_tw
         
+        # 動態獲取板塊週績效排名
+        sector_tier = "medium"
+        ranking_success = False
+        try:
+            from core.tools.yahoo_finance import get_sector_rankings
+            rankings = get_sector_rankings(region)
+            if rankings:
+                ranked_sectors = [item["ticker"].upper() for item in rankings if "ticker" in item]
+                if sector_code.upper() in ranked_sectors:
+                    idx = ranked_sectors.index(sector_code.upper())
+                    num_sectors = len(ranked_sectors)
+                    
+                    if idx < 3: # 前 3 名強勢
+                        sector_tier = "top"
+                    elif idx >= max(3, num_sectors - 3): # 後 3 名弱勢
+                        sector_tier = "bottom"
+                    else:
+                        sector_tier = "medium"
+                    ranking_success = True
+                    print(f"[*] 預算代理人：{ticker} 所屬板塊 {sector_code} 週績效排名第 {idx + 1}/{num_sectors} (歸類為 {sector_tier.upper()} 級)。")
+        except Exception as e:
+            print(f"[!] 預算代理人提示：動態獲取板塊排行失敗，將降級套用靜態板塊限制。錯誤: {e}")
+            
         # 三層自適應決策漏斗 —— 預算限制矩陣
         max_ratio = 0.40  # 預設上限
         
-        if meso_regime == "BULL_GROWTH_ON":
-            # 科技多頭：科技股上限為 40%，非科技股上限縮至 20%
-            max_ratio = 0.40 if is_tech else 0.20
-        elif meso_regime == "BULL_VALUE_ON":
-            # 傳統多頭：傳統股/價值股上限為 40%，科技股上限縮至 20%
-            max_ratio = 0.20 if is_tech else 0.40
-        elif meso_regime == "VOLATILE_PANIC":
-            # 高波震盪：全域上限降低至 20% 防禦
-            max_ratio = 0.20
-        elif meso_regime == "BEAR_RISK_OFF":
-            # 系統性空頭：防禦性板塊上限為 30%，進攻性板塊上限為 10%
-            max_ratio = 0.30 if is_defensive else 0.10
+        if ranking_success:
+            # A. 動態板塊評級預算限制
+            if meso_regime in ["BULL_GROWTH_ON", "BULL_VALUE_ON"]:
+                if sector_tier == "top":
+                    max_ratio = 0.40
+                elif sector_tier == "medium":
+                    max_ratio = 0.25
+                else: # bottom
+                    max_ratio = 0.10
+            elif meso_regime == "VOLATILE_PANIC":
+                if sector_tier == "top":
+                    max_ratio = 0.25
+                elif sector_tier == "medium":
+                    max_ratio = 0.15
+                else: # bottom
+                    max_ratio = 0.05
+            elif meso_regime == "BEAR_RISK_OFF":
+                if sector_tier == "top":
+                    max_ratio = 0.20
+                elif sector_tier == "medium":
+                    max_ratio = 0.10
+                else: # bottom
+                    max_ratio = 0.00  # 凍結買入
+            else:
+                if sector_tier == "top":
+                    max_ratio = 0.35
+                elif sector_tier == "medium":
+                    max_ratio = 0.20
+                else: # bottom
+                    max_ratio = 0.10
+        else:
+            # B. 降級 Fallback: 原始靜態板塊限制
+            if meso_regime == "BULL_GROWTH_ON":
+                # 科技多頭：科技股上限為 40%，非科技股上限縮至 20%
+                max_ratio = 0.40 if is_tech else 0.20
+            elif meso_regime == "BULL_VALUE_ON":
+                # 傳統多頭：傳統股/價值股上限為 40%，科技股上限縮至 20%
+                max_ratio = 0.20 if is_tech else 0.40
+            elif meso_regime == "VOLATILE_PANIC":
+                # 高波震盪：全域上限降低至 20% 防禦
+                max_ratio = 0.20
+            elif meso_regime == "BEAR_RISK_OFF":
+                # 系統性空頭：防禦性板塊上限為 30%，進攻性板塊上限為 10%
+                max_ratio = 0.30 if is_defensive else 0.10
             
         ratio = min(ratio, max_ratio)
         

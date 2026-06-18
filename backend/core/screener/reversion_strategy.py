@@ -29,7 +29,9 @@ class ReversionScreener(BaseScreener):
             try:
                 t = yf.Ticker(ticker)
                 # Pull 1 year history to get 200-day moving average and 14-day RSI
-                hist = t.history(period="1y").dropna(subset=["Close"])
+                from core.tools.yahoo_finance import silence_all
+                with silence_all():
+                    hist = t.history(period="1y").dropna(subset=["Close"])
                 if hist.empty or len(hist) < 200:
                     failed_liquidity += 1
                     continue
@@ -87,7 +89,9 @@ class ReversionScreener(BaseScreener):
                 # Get the company name
                 name = ticker
                 try:
-                    name = t.info.get("longName", ticker)
+                    from core.tools.yahoo_finance import silence_all
+                    with silence_all():
+                        name = t.info.get("longName", ticker)
                 except Exception:
                     pass
                 

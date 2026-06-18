@@ -1,6 +1,6 @@
 from pathlib import Path
 from core.agents.base_agent import BaseAgent
-from core.config import REPORT_LANGUAGE, WRITER_GEMINI_MODEL
+from core.config import REPORT_LANGUAGE, WRITER_MODEL
 
 def load_prompt_file(filename: str, fallback: str) -> str:
     try:
@@ -26,11 +26,12 @@ class WriterAgent(BaseAgent):
             name="WriterAgent",
             role="Chief Editor & Investment Strategist",
             system_instruction=system_instruction,
-            model_name=WRITER_GEMINI_MODEL
+            model_name=WRITER_MODEL
         )
 
     def synthesize(self, date_str: str, macro_reports: list, market_reports: list,
-                   stock_reports: list, reflection_report: str, candidate_summary: str = None) -> str:
+                   stock_reports: list, reflection_report: str, candidate_summary: str = None,
+                   portfolio_ledger: str = None) -> str:
         """Synthesizes all analyst sub-reports into a single comprehensive Weekly Investment Report."""
         
         # Structure the giant context prompt for synthesis
@@ -43,18 +44,19 @@ class WriterAgent(BaseAgent):
         lang_directive = lang_directive_en if REPORT_LANGUAGE == "EN" else lang_directive_zh
         
         prompt = f"""
-請將以下所有專業分析師的獨立子報告，融會貫通並重新整合編輯，撰寫出【{date_str}】當週的【全球投資策略與多維度決策週報】。
+請將以下所有專業分析師的獨立子報告，與本週實戰帳戶交易與持倉調整明細，融會貫通並重新整合編輯，撰寫出【{date_str}】當週的【全球投資策略與多維度決策週報】。
 
 【語言與寫作指示】：
 {lang_directive}
 
-【總編輯特別任務 ── 決策評級透明度】：
-本週所有被分析的候選標的與其初步評級如下：
+【總編輯特別任務 ── 決策評級透明度與交易/板塊呼應】：
+本週所有被分析的候選標的（包含其隸屬的板塊/ETF）與其初步評級如下：
 {candidate_summary or "（無）"}
 
-請遵循以下寫作紀律以求決策透明：
-1. 僅將評級為 Buy 或 Strong Buy 的標的列入「### 📋 本週推薦配置總覽表」中。
-2. 所有評級為 Hold（持有/觀望）或 Sell / Avoid（避免買入）的標的，**必須無一遺漏地**列入「### ⚠️ 本週排除/觀望標的與防禦警示」表格，並在下方寫出具體的不推薦原因（例如：估值高估、風險報酬比不合要求、或大盤熔斷凍結），每檔限 50-80 字，使投資人清晰掌握不推薦的理由，絕不允許隨意遺漏！
+請遵循以下寫作紀律以求決策透明與報告呼應：
+1. 僅將評級為 Buy 或 Strong Buy 的標的列入「### 本週推薦配置總覽表」中。**請務必在推薦表內或下方的「深入投資理由說明」中，清晰標明每檔推薦個股所隸屬的產業板塊或對應的 ETF 代號（例如在個股名稱旁標註 (隸屬 XLP 板塊)），以便讀者對照選股掃描報告進行呼應查詢。**
+2. 所有評級為 Hold（持有/觀望）或 Sell / Avoid（避免買入）的標的，**必須無一遺漏地**列入「### 本週調降/避險排除標的與防禦配置說明」表格，並在下方寫出具體的不推薦原因（例如：估值高估、風險報酬比不合要求、或大盤熔斷凍結，每檔限 50-80 字），並標註其隸屬的板塊/ETF，絕不允許隨意遺漏！
+3. **本週所有實際帳戶交易成交紀錄已列於下方【5. 本週實戰帳戶交易與持倉調整明細】，請務必將其整理並填寫於最後的「### 本週實戰帳戶交易與持倉調整明細」表格中**，特別注意若有評級為 Hold 的個股被建倉/分配 5% 權重，必須在此表內明確列出，讓讀者清晰掌握帳戶資金與實際持股變化。
 
 ==================================================
 【1. 各區域總體經濟分析師子報告】：
@@ -71,6 +73,10 @@ class WriterAgent(BaseAgent):
 ==================================================
 【4. 歷史回測與決策自我修正子報告】：
 {reflection_report}
+
+==================================================
+【5. 本週實戰帳戶交易與持倉調整明細】：
+{portfolio_ledger or "（本週無新交易紀錄，維持原持倉）"}
 ==================================================
 
 請嚴格遵循總編輯角色規範，消除贅字，統一格式，產出一份令人驚豔的高水準報告！

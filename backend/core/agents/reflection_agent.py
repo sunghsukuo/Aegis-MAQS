@@ -306,6 +306,18 @@ class ReflectionAgent(BaseAgent):
             except Exception:
                 new_version = "v1.0.1"
                 
+            # 執行 QA 驗證（A/B Test Sandbox 防線）
+            try:
+                from backtest.prompt_qa import run_prompt_qa_verification
+                qa_passed = run_prompt_qa_verification(agent_name, new_prompt.strip(), curr_prompt)
+            except Exception as qa_err:
+                print(f"[!] [自適應 Prompt 演化] 執行 Prompt QA 驗證時發生異常: {qa_err}。為防禦潛在風險，拒絕本次演化。")
+                qa_passed = False
+
+            if not qa_passed:
+                print(f"[✗] [自適應 Prompt 演化] 新 Prompt 未通過 QA 驗證防線，放棄本次演化，保留原 Prompt (版本：{curr_version})。")
+                return None
+                
             if not dry_run:
                 # 寫入 Prompt 註冊表
                 db.save_prompt_registry(agent_name, new_prompt.strip(), new_version)
@@ -321,7 +333,7 @@ class ReflectionAgent(BaseAgent):
                     prompt_version=curr_version
                 )
             else:
-                print(f"[✓] [自適應 Prompt 演化] [Dry-run 模式] 成功模擬演化新版 System Prompt，預計升級版本 {curr_version} -> {new_version}。")
+                print(f"[✓] [自適應 Prompt 演化] [Dry-run 模式] 成功模擬演化新版 System Prompt，且已通過 QA 驗證！預計升級版本 {curr_version} -> {new_version}。")
 
             return {
                 "old_prompt": curr_prompt,
