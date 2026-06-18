@@ -40,8 +40,8 @@ def _is_potential_taiwan_query(query_str: str) -> bool:
     2. End with ".TW" or ".TWO" (case-insensitive)
     3. Contain at least one Chinese character
     """
-    # 1. Pure digits
-    if query_str.isdigit():
+    # 1. Alphanumeric stock code format (e.g., "2330", "00988A", "2330A")
+    if re.match(r"^[0-9A-Z]{4,6}$", query_str, re.IGNORECASE):
         return True
     
     # 2. Ends with .TW or .TWO
@@ -60,11 +60,11 @@ def get_taiwan_stock_name(ticker_or_code: str) -> str:
     First checks the local database. If not found, runs a TWSE/TPEx ISIN sync (subject to weekly cooldown),
     then queries again.
     """
-    # Clean code: extract digits (e.g. "3293.TWO" -> "3293")
-    match = re.match(r"^(\d+)", ticker_or_code.strip())
+    # Clean code: extract stock code (e.g. "3293.TWO" -> "3293", "00988A.TW" -> "00988A")
+    match = re.match(r"^([0-9A-Za-z]+)", ticker_or_code.strip())
     if not match:
         return None
-    code = match.group(1)
+    code = match.group(1).upper()
 
     # 1. Query local database
     with db_session() as conn:
@@ -139,10 +139,10 @@ def sync_taiwan_stock_names(force=False):
                 if not cols:
                     continue
                 text = cols[0].get_text(strip=True)
-                # Match code and name (e.g., "1101　台泥" or "1101  台泥" or "1101台泥")
-                m = re.match(r"^(\d+)[\s\u3000]+(.+)$", text)
+                # Match code and name (e.g., "1101　台泥", "00988A  國泰債")
+                m = re.match(r"^([0-9A-Za-z]+)[\s\u3000]+(.+)$", text)
                 if m:
-                    code = m.group(1)
+                    code = m.group(1).upper()
                     name = m.group(2).strip()
                     industry_type = ""
                     if len(cols) > 4:
@@ -171,14 +171,15 @@ def _query_local_db(query_str: str) -> dict:
     """
     Performs local database lookup for a clean code or Chinese name.
     """
-    # 1. Check if query is numeric (e.g. "3293" or "2330")
-    if query_str.isdigit():
+    # 1. Check if query is a stock code (e.g. "3293", "00988A")
+    if re.match(r"^[0-9A-Z]{4,6}$", query_str, re.IGNORECASE):
+        code_upper = query_str.upper()
         with db_session() as conn:
             cursor = conn.cursor()
             execute_sql(cursor,
                 "SELECT chinese_name, market_type FROM taiwan_stock_names WHERE stock_code = ?",
                 "SELECT chinese_name, market_type FROM taiwan_stock_names WHERE stock_code = %s",
-                (query_str,)
+                (code_upper,)
             )
             row = cursor.fetchone()
             if row:

@@ -305,12 +305,11 @@ def is_etf_ticker(ticker: str) -> bool:
     # Tier 3: Static format rules (e.g. Taiwan tickers, US indices)
     if ticker_clean.endswith(".TW") or ticker_clean.endswith(".TWO"):
         ticker_num = ticker_clean.split(".")[0]
-        if ticker_num.isdigit():
-            # Taiwan ETFs normally start with "00", e.g., 0050, 0056, 00632R (though some have letters, prefix starts with 00)
-            if ticker_num.startswith("00"):
-                return True
-            elif len(ticker_num) == 4:
-                return False
+        # Taiwan ETFs normally start with "00", e.g., 0050, 0056, 00988A, 00632R (though some have letters, prefix starts with 00)
+        if ticker_num.startswith("00"):
+            return True
+        elif len(ticker_num) == 4 and ticker_num.isdigit():
+            return False
     elif ticker_clean.startswith("^"):
         return True
 
