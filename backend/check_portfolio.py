@@ -195,36 +195,37 @@ def run_portfolio_check(report_date: str, regions: list = None):
                 )
                 notifier.send_message(msg)
             else:
-                # Still active, check and apply trailing stop (breakeven & chandelier) protection!
-                tech_metrics = yf_tool.calculate_technical_metrics(ticker)
-                atr_14 = tech_metrics.get("atr_14")
-                if atr_14:
-                    from core.risk.trailing_stop import check_and_apply_breakeven_stop, check_and_apply_chandelier_stop
-                    
-                    # 1. Check breakeven stop
-                    updated_be = check_and_apply_breakeven_stop(rec, current_price, atr_14)
-                    if updated_be:
-                        rec["stop_loss"] = recommend_price
-                        stop_loss = recommend_price
-                        
-                    # 2. Extract stock's beta from cache for Chandelier stop
-                    stock_beta = 1.0
-                    try:
-                        import json
-                        from core.config import CACHE_DIR
-                        cache_file = CACHE_DIR / f"financials_{ticker}.json"
-                        if cache_file.exists():
-                            with open(cache_file, "r", encoding="utf-8") as f:
-                                cache_data = json.load(f)
-                                stock_beta = cache_data.get("beta", 1.0) or 1.0
-                    except Exception:
-                        pass
-                        
-                    # 3. Check Chandelier trailing stop
-                    macro_regime = rec.get("macro_regime")
-                    updated_ch = check_and_apply_chandelier_stop(rec, current_price, atr_14, stock_beta, macro_regime)
-                    if updated_ch:
-                        stop_loss = rec["stop_loss"]
+                # [方案 A - 已停用] 原本的保本停損與移動停損機制已被禁用，完全依據週報中產出的原始目標價與原始停損點。
+                # tech_metrics = yf_tool.calculate_technical_metrics(ticker)
+                # atr_14 = tech_metrics.get("atr_14")
+                # if atr_14:
+                #     from core.risk.trailing_stop import check_and_apply_breakeven_stop, check_and_apply_chandelier_stop
+                #     
+                #     # 1. Check breakeven stop
+                #     updated_be = check_and_apply_breakeven_stop(rec, current_price, atr_14)
+                #     if updated_be:
+                #         rec["stop_loss"] = recommend_price
+                #         stop_loss = recommend_price
+                #         
+                #     # 2. Extract stock's beta from cache for Chandelier stop
+                #     stock_beta = 1.0
+                #     try:
+                #         import json
+                #         from core.config import CACHE_DIR
+                #         cache_file = CACHE_DIR / f"financials_{ticker}.json"
+                #         if cache_file.exists():
+                #             with open(cache_file, "r", encoding="utf-8") as f:
+                #                 cache_data = json.load(f)
+                #                 stock_beta = cache_data.get("beta", 1.0) or 1.0
+                #     except Exception:
+                #         pass
+                #         
+                #     # 3. Check Chandelier trailing stop
+                #     macro_regime = rec.get("macro_regime")
+                #     updated_ch = check_and_apply_chandelier_stop(rec, current_price, atr_14, stock_beta, macro_regime)
+                #     if updated_ch:
+                #         stop_loss = rec["stop_loss"]
+                pass
                         
                 # Still active, calculate and update current unrealized ROI & PnL
                 shares = rec.get("shares", 0.0)

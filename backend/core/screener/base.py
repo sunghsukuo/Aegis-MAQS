@@ -260,6 +260,61 @@ class BaseScreener:
             lines.append(explanation)
             lines.append("\n---")
             
+        # Add strategy scoring explanations dynamically
+        strategies_used = set(item.get("strategy") for item in self.session_history if item.get("strategy"))
+        if strategies_used:
+            if is_zh:
+                lines.append("\n## 量化選股策略評分機制說明\n")
+            else:
+                lines.append("\n## Quantitative Stock Selection Strategy Scoring Mechanism\n")
+                
+            for strat in sorted(strategies_used):
+                if strat == "reversion":
+                    if is_zh:
+                        lines.append(
+                            "> [!NOTE]\n"
+                            "> **均值回歸拉回策略 (Mean Reversion) 評分機制說明**：\n"
+                            "> 適用於市場震盪整理或具備均值回歸特性的板塊。系統先排除「長期空頭（低於 200MA）」與「短線過度延伸（偏離 50MA 超過 -5% 或 +8%）」的個股，並要求 RSI-14 $\\le$ 55。\n"
+                            "> 通過篩選後，量化評分由以下四個維度加總計算（總分越高越推薦）：\n"
+                            "> 1. **拉回幅度分數**：近 5 日股價跌幅百分比（跌越多分數越高）。\n"
+                            "> 2. **RSI 輔助分數**：$(100 - \\text{RSI-14}) / 10$（越超賣分數越高，滿分 10 分）。\n"
+                            "> 3. **均線支撐加成**：股價位於 50MA 之上 `0.0% ~ 4.0%` 區間給予 **`+5.0` 分**；位於 50MA 之下 `0.0% ~ -3.0%` 區間給予 **`+3.0` 分**。\n"
+                            "> 4. **成交量加成**：$\\min(\\text{當前量能比}, 2.0) / 2 \\times 3.0$（量能出現低接信號時，滿分 3 分）。\n"
+                        )
+                    else:
+                        lines.append(
+                            "> [!NOTE]\n"
+                            "> **Mean Reversion Strategy Scoring Explanation**:\n"
+                            "> Used for rangebound markets or mean-reverting sectors. The system filters out \"long-term downtrends (below 200MA)\", \"short-term overextended price (deviated from 50MA by <-5% or >+8%)\", and requires RSI-14 $\\le$ 55.\n"
+                            "> The quantitative score is calculated as a sum of four factors (higher is better):\n"
+                            "> 1. **Pullback Score**: 5-day return drop percentage (larger drops yield higher scores).\n"
+                            "> 2. **RSI Score**: $(100 - \\text{RSI-14}) / 10$ (more oversold yields higher score, max 10 points).\n"
+                            "> 3. **Support Bonus**: **`+5.0` points** if price is `0.0% ~ 4.0%` above 50MA; **`+3.0` points** if price is `0.0% ~ -3.0%` below 50MA.\n"
+                            "> 4. **Volume Score**: $\\min(\\text{Volume Spike}, 2.0) / 2 \\times 3.0$ (rewards low-level accumulation volume, max 3 points).\n"
+                        )
+                elif strat == "momentum":
+                    if is_zh:
+                        lines.append(
+                            "> [!NOTE]\n"
+                            "> **動量趨勢策略 (Momentum) 評分機制說明**：\n"
+                            "> 適用於強勢上漲或單邊多頭趨勢的板塊。系統先排除「流動性不足」與「短線空頭排列（低於 20MA）」的個股。\n"
+                            "> 通過篩選後，量化評分計算方式會依據當前大盤巨觀情境（Macro Regime）動態調整權重與懲罰項：\n"
+                            "> 1. **多頭上漲/正常情境**：$\\text{5日漲幅百分比} \\times 0.7 + \\min(\\text{成交量增幅}, 3.0) / 3.0 \\times 3.0$（注重漲幅動能）。\n"
+                            "> 2. **震盪整理情境 (VOLATILE_RANGEBOUND)**：$\\text{5日漲幅百分比} \\times 0.5 + \\min(\\text{成交量增幅}, 3.0) / 3.0 \\times 3.0 - \\text{波動率懲罰}$（波動率懲罰為 $\\min(\\text{20日日波動率} \\times 0.75, 2.5)$）。\n"
+                            "> 3. **熊市避險情境 (BEAR_RISK_OFF)**：$\\text{5日漲幅百分比} \\times 0.3 + \\min(\\text{成交量增幅}, 3.0) / 3.0 \\times 3.0 - \\text{波動率懲罰}$（波動率懲罰為 $\\min(\\text{20日日波動率} \\times 1.5, 5.0)$）。\n"
+                        )
+                    else:
+                        lines.append(
+                            "> [!NOTE]\n"
+                            "> **Momentum Strategy Scoring Explanation**:\n"
+                            "> Used for strong uptrends or bull markets. The system filters out \"illiquid assets\" and \"short-term downtrends (below 20MA)\".\n"
+                            "> The quantitative score adjusts dynamically based on the current Macro Regime:\n"
+                            "> 1. **Bull/Normal Regime**: $\\text{5-day Return \\%} \\times 0.7 + \\text{Volume Spike Score} \\times 0.3$ (rewards strong upward price momentum).\n"
+                            "> 2. **Volatile Rangebound Regime**: $\\text{5-day Return \\%} \\times 0.5 + \\text{Volume Spike Score} \\times 0.5 - \\text{Volatility Penalty}$ (where penalty is $\\min(\\text{20-day Volatility \\%} \\times 0.75, 2.5)$).\n"
+                            "> 3. **Bear Risk Off Regime**: $\\text{5-day Return \\%} \\times 0.3 + \\text{Volume Spike Score} \\times 0.7 - \\text{Volatility Penalty}$ (where penalty is $\\min(\\text{20-day Volatility \\%} \\times 1.5, 5.0)$).\n"
+                        )
+            lines.append("\n---")
+            
         lines.append(f"\n## {sec_title}\n")
         
         if not self.session_history:

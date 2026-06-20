@@ -242,6 +242,11 @@ def seed_static_configurations(backtest_conn):
     backtest_cursor.execute("DELETE FROM prompt_registry")
     backtest_conn.commit()
     
+    # Temporarily restore DB_TYPE to production configuration to load configurations from the correct database (e.g. MySQL)
+    import os
+    old_db_type = prod_db.DB_TYPE
+    prod_db.DB_TYPE = os.getenv("DB_TYPE", "sqlite")
+    
     try:
         # Load from production
         with prod_db.db_session() as prod_conn:
@@ -297,6 +302,8 @@ def seed_static_configurations(backtest_conn):
         import traceback
         traceback.print_exc()
         print(f"[!] Warning: 無法同步實戰資料庫設定，回測將使用空設定運行。錯誤: {e}")
+    finally:
+        prod_db.DB_TYPE = old_db_type
 
 def get_backtest_capital_state(currency: str) -> dict:
     """Helper to retrieve capital state from backtest ledger."""

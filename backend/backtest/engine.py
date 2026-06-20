@@ -143,7 +143,8 @@ class BacktestEngine:
                     self.execute_weekly_analysis(sim_date_str)
                 
                 # 4. 定期觸發自適應 Prompt 演化 (整合 Prompt QA 驗證)
-                if week_count > 0 and week_count % evolution_trigger_weeks == 0:
+                # 僅在非管線模式下由回測引擎觸發，避免與生產管線 Phase 10 重複執行
+                if not self.use_pipeline and week_count > 0 and week_count % evolution_trigger_weeks == 0:
                     print("\n[🛡️ 演化週期] 達到演化間隔，啟動 ReflectionAgent 自適應演化引擎...")
                     try:
                         # 執行演化，這會自動在 sqlite 內部調用 run_prompt_qa_verification
@@ -323,6 +324,53 @@ class BacktestEngine:
         from core.agents.budget_agent import BudgetAgent
         budget_agent = BudgetAgent()
         
+        # 統計區域與策略績效
+        strategy_stats = {}
+        region_stats = {}
+        cross_stats = {}
+        
+        for t in closed_trades:
+            reg = t.get("region", "Unknown")
+            price_regime = (t.get("price_regime") or "MOMENTUM_TREND").upper()
+            if "REVERSION" in price_regime or "RANGEBOUND" in price_regime or price_regime == "MEAN_REVERSION_RANGE":
+                strat = "均值回歸策略 (Reversion)"
+            else:
+                strat = "趨勢動量策略 (Momentum)"
+                
+            perf = t.get("performance") if t.get("performance") is not None else 0.0
+            pnl = t.get("pnl") if t.get("pnl") is not None else 0.0
+            is_win = 1 if perf > 0.0 else 0
+            
+            curr = budget_agent.get_currency_by_region(reg)
+            
+            # 1. Strategy Stats
+            if strat not in strategy_stats:
+                strategy_stats[strat] = {"count": 0, "wins": 0, "total_perf": 0.0, "pnl_usd": 0.0, "pnl_twd": 0.0}
+            strategy_stats[strat]["count"] += 1
+            strategy_stats[strat]["wins"] += is_win
+            strategy_stats[strat]["total_perf"] += perf
+            if curr == "USD":
+                strategy_stats[strat]["pnl_usd"] += pnl
+            else:
+                strategy_stats[strat]["pnl_twd"] += pnl
+                
+            # 2. Region Stats
+            if reg not in region_stats:
+                region_stats[reg] = {"count": 0, "wins": 0, "total_perf": 0.0, "pnl": 0.0, "curr": curr}
+            region_stats[reg]["count"] += 1
+            region_stats[reg]["wins"] += is_win
+            region_stats[reg]["total_perf"] += perf
+            region_stats[reg]["pnl"] += pnl
+            
+            # 3. Cross Stats
+            cross_key = (reg, strat)
+            if cross_key not in cross_stats:
+                cross_stats[cross_key] = {"count": 0, "wins": 0, "total_perf": 0.0, "pnl": 0.0, "curr": curr}
+            cross_stats[cross_key]["count"] += 1
+            cross_stats[cross_key]["wins"] += is_win
+            cross_stats[cross_key]["total_perf"] += perf
+            cross_stats[cross_key]["pnl"] += pnl
+
         currencies_report = {}
         for region in self.regions:
             curr = budget_agent.get_currency_by_region(region)
@@ -366,6 +414,23 @@ class BacktestEngine:
             print(f"   - 累計回報率    ：{rep['total_return']*100:+.2f}%")
             print(f"   - 年化夏普比率  ：{rep['sharpe']:+.2f}")
             print(f"   - 最大歷史回撤  ：{rep['mdd']*100:.2f}%")
+
+        if closed_trades:
+            print("\n🎯 【選股策略與區域績效統計】")
+            print("-" * 50)
+            print("📈 [按選股策略分類]")
+            for strat, s_data in strategy_stats.items():
+                s_count = s_data["count"]
+                s_win_rate = (s_data["wins"] / s_count) * 100 if s_count > 0 else 0.0
+                s_avg_roi = (s_data["total_perf"] / s_count) * 100 if s_count > 0 else 0.0
+                print(f"   - {strat}：交易 {s_count} 筆 | 勝率 {s_win_rate:.2f}% | 平均報酬 {s_avg_roi:+.2f}% | 實現盈虧 USD {s_data['pnl_usd']:+,.2f} / TWD {s_data['pnl_twd']:+,.2f}")
+            
+            print("\n🌍 [按市場區域分類]")
+            for reg, r_data in region_stats.items():
+                r_count = r_data["count"]
+                r_win_rate = (r_data["wins"] / r_count) * 100 if r_count > 0 else 0.0
+                r_avg_roi = (r_data["total_perf"] / r_count) * 100 if r_count > 0 else 0.0
+                print(f"   - {reg}：交易 {r_count} 筆 | 勝率 {r_win_rate:.2f}% | 平均報酬 {r_avg_roi:+.2f}% | 實現盈虧 {r_data['pnl']:+,.2f} {r_data['curr']}")
             
         print(f"\n🤖 Prompt 演化次數：{len(prompt_versions) - 1} 次")
         for i, pv in enumerate(prompt_versions):
@@ -403,18 +468,78 @@ class BacktestEngine:
 *   **平倉交易勝率**：`{win_rate*100:.2f}%` (`{len(wins)}` 勝 / `{len(losses)}` 負)
 
 ### 🧾 歷史平倉交易明細
-| 編號 | 交易日期 | 個股 Ticker | 企業名稱 | 推薦價格 | 平倉價格 | 累計回報率 | 結算狀態 |
-| :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| 編號 | 交易日期 | 區域 | 選股策略 | 個股 Ticker | 企業名稱 | 推薦價格 | 平倉價格 | 累計回報率 | 結算狀態 |
+| :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
 """
         for i, t in enumerate(closed_trades):
             perf = t.get('performance') if t.get('performance') is not None else 0.0
             roi_str = f"{perf*100:+.2f}%"
             status_tag = "🟢 獲利平倉" if perf > 0.0 else "🔴 停損避險"
-            report_md += f"| {i+1} | {t['report_date']} | {t['ticker']} | {t['company_name']} | {t['recommend_price']:.2f} | {t.get('close_price', 0.0):.2f} | **{roi_str}** | {status_tag} |\n"
+            
+            # Determine region and strategy
+            reg = t.get("region", "Unknown")
+            price_regime = (t.get("price_regime") or "MOMENTUM_TREND").upper()
+            if "REVERSION" in price_regime or "RANGEBOUND" in price_regime or price_regime == "MEAN_REVERSION_RANGE":
+                strat = "均值回歸 (Reversion)"
+            else:
+                strat = "動量趨勢 (Momentum)"
+                
+            report_md += f"| {i+1} | {t['report_date']} | {reg} | {strat} | {t['ticker']} | {t['company_name']} | {t['recommend_price']:.2f} | {t.get('close_price', 0.0):.2f} | **{roi_str}** | {status_tag} |\n"
 
+        # 新增選股策略與區域績效統計章節
+        report_md += f"""
+## 4. 選股策略與市場區域績效統計
+
+### 📈 按選股策略分類
+| 選股策略 | 交易筆數 | 勝率 | 平均報酬率 | 實現盈虧 (P&L) |
+| :--- | :---: | :---: | :---: | :---: |
+"""
+        for strat, s_data in strategy_stats.items():
+            s_count = s_data["count"]
+            s_win_rate = (s_data["wins"] / s_count) * 100 if s_count > 0 else 0.0
+            s_avg_roi = (s_data["total_perf"] / s_count) * 100 if s_count > 0 else 0.0
+            
+            pnl_strs = []
+            if s_data["pnl_usd"] != 0.0:
+                pnl_strs.append(f"USD ${s_data['pnl_usd']:+,.2f}")
+            if s_data["pnl_twd"] != 0.0:
+                pnl_strs.append(f"TWD ${s_data['pnl_twd']:+,.2f}")
+            pnl_display = " / ".join(pnl_strs) if pnl_strs else "0.00"
+            
+            report_md += f"| {strat} | {s_count} 筆 | {s_win_rate:.2f}% | {s_avg_roi:+.2f}% | {pnl_display} |\n"
 
         report_md += f"""
-## 4. Prompt 提示詞演化軌跡
+### 🌍 按市場區域分類
+| 市場區域 | 交易筆數 | 勝率 | 平均報酬率 | 實現盈虧 (P&L) |
+| :--- | :---: | :---: | :---: | :---: |
+"""
+        for reg, r_data in region_stats.items():
+            r_count = r_data["count"]
+            r_win_rate = (r_data["wins"] / r_count) * 100 if r_count > 0 else 0.0
+            r_avg_roi = (r_data["total_perf"] / r_count) * 100 if r_count > 0 else 0.0
+            
+            curr_symbol = "$"
+            pnl_display = f"{r_data['curr']} {curr_symbol}{r_data['pnl']:+,.2f}"
+            
+            report_md += f"| {reg} | {r_count} 筆 | {r_win_rate:.2f}% | {r_avg_roi:+.2f}% | {pnl_display} |\n"
+
+        report_md += f"""
+### 🔀 交叉維度分析 (區域 + 策略)
+| 市場區域 | 選股策略 | 交易筆數 | 勝率 | 平均報酬率 | 實現盈虧 (P&L) |
+| :---: | :---: | :---: | :---: | :---: | :---: |
+"""
+        for (reg, strat), c_data in sorted(cross_stats.items()):
+            c_count = c_data["count"]
+            c_win_rate = (c_data["wins"] / c_count) * 100 if c_count > 0 else 0.0
+            c_avg_roi = (c_data["total_perf"] / c_count) * 100 if c_count > 0 else 0.0
+            
+            curr_symbol = "$"
+            pnl_display = f"{c_data['curr']} {curr_symbol}{c_data['pnl']:+,.2f}"
+            
+            report_md += f"| {reg} | {strat} | {c_count} 筆 | {c_win_rate:.2f}% | {c_avg_roi:+.2f}% | {pnl_display} |\n"
+
+        report_md += f"""
+## 5. Prompt 提示詞演化軌跡
 在回測模擬期間，當累積足夠失敗平倉紀錄後，系統自動調度 `ReflectionAgent` 與 `MetaPromptOptimizer` 對 `FundamentalAgent` 進行提示詞的自我校正升級。每次升級均通過了 QA 沙盒防線的嚴格校驗：
 
 | 序號 | 演化版本 | 升級時間 | 狀態 |

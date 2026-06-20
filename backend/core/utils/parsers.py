@@ -42,12 +42,12 @@ def format_markdown_for_terminal(text: str) -> str:
     return "\n".join(formatted_lines)
 
 
-def extract_price_from_line(line: str, current_price: float, is_target: bool = None) -> float:
+def extract_price_from_line(line: str, current_price: float, is_target: bool = None, reference_price: float = None) -> float:
     """
     Robustly extracts the target price or stop-loss price from a line of markdown text,
     filtering out small integers (like 10, 15, 200) representing days, weights, or SMA indicators,
     rejecting general discussion/strategy lines containing irrelevant numbers (e.g., PEG, history tickers),
-    and returns the value that is closest to the current stock price.
+    and returns the value that is closest to the reference_price (or a calculated fallback zone).
     """
     # Reject lines that are clearly discussion/macro paragraphs rather than direct recommendations.
     # If the line is a formatted bullet point (e.g. starting with '*' and containing '**'), bypass this filter.
@@ -80,9 +80,12 @@ def extract_price_from_line(line: str, current_price: float, is_target: bool = N
             # Target price must be strictly greater than current price.
             # Stop loss must be strictly less than current price.
             if current_price:
-                if is_target is True and val <= current_price:
+                # Use a small tolerance buffer (0.1%) to handle rounding discrepancies (e.g. 221.90 vs 221.897)
+                # target must be strictly > current_price * 1.001 to prevent matching rounded recommended price
+                if is_target is True and val <= current_price * 1.001:
                     continue
-                if is_target is False and val >= current_price:
+                # stop loss must be strictly < current_price * 0.999 to prevent matching rounded recommended price
+                if is_target is False and val >= current_price * 0.999:
                     continue
                     
             valid_prices.append(val)
@@ -90,9 +93,20 @@ def extract_price_from_line(line: str, current_price: float, is_target: bool = N
             continue
             
     if valid_prices:
-        if current_price:
-            closest_price = min(valid_prices, key=lambda x: abs(x - current_price))
-            if abs(closest_price - current_price) / current_price < 0.6:
+        # Determine the best reference price for comparison
+        ref_p = reference_price
+        if ref_p is None and current_price:
+            if is_target is True:
+                ref_p = current_price * 1.15  # Fallback to standard 15% target
+            elif is_target is False:
+                ref_p = current_price * 0.92  # Fallback to standard 8% stop loss
+            else:
+                ref_p = current_price
+                
+        if ref_p:
+            closest_price = min(valid_prices, key=lambda x: abs(x - ref_p))
+            # The parsed price should be reasonably close to the reference price (within 40% margin)
+            if abs(closest_price - ref_p) / ref_p < 0.4:
                 return closest_price
             return 0.0  # Reject values that are too far away
         return valid_prices[-1]  # Fallback to the last matched number

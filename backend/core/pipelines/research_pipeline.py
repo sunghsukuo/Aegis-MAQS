@@ -97,19 +97,27 @@ def research_and_track_asset(
     )
     time.sleep(2)
     
+    # 預先計算系統建議波動停損利價作為解析時的對比參考點，避免四捨五入誤差將買入價誤判為目標價
+    from core.risk.risk_manager import calculate_risk_boundaries
+    atr_14 = financials.get("atr_14")
+    beta = financials.get("beta", 1.0)
+    risk_res = calculate_risk_boundaries(curr_price, atr_14, beta, macro_regime=macro_regime)
+    suggested_tp = risk_res["suggested_tp"]
+    suggested_sl = risk_res["suggested_sl"]
+
     # 解析輸出參數
-    target_p = curr_price * 1.15
-    stop_l = curr_price * 0.92
+    target_p = suggested_tp
+    stop_l = suggested_sl
     rating = "Hold"
     suggested_weight = None
     
     lines = stock_report.split("\n")
     for line in lines:
         if "目標價" in line or "中線目標價" in line:
-            parsed_val = extract_price_from_line(line, curr_price, is_target=True)
+            parsed_val = extract_price_from_line(line, curr_price, is_target=True, reference_price=suggested_tp)
             if parsed_val > 0.0: target_p = parsed_val
         elif "停損點" in line or "防禦停損點" in line:
-            parsed_val = extract_price_from_line(line, curr_price, is_target=False)
+            parsed_val = extract_price_from_line(line, curr_price, is_target=False, reference_price=suggested_sl)
             if parsed_val > 0.0: stop_l = parsed_val
         elif "投資評級" in line:
             line_upper = line.upper()
@@ -219,7 +227,7 @@ def research_and_track_asset(
         "rec_id": rec_id
     }
 
-def run_regional_reflection(region_code: str, report_date: str) -> str:
+def run_regional_reflection(region_code: str, report_date: str, state: dict = None) -> str:
     """
     Gathers active and closed recommendations specific to a region,
     measures them against regional benchmark index, and triggers ReflectionAgent
@@ -227,6 +235,29 @@ def run_regional_reflection(region_code: str, report_date: str) -> str:
     """
     print_info(f"[{region_code}] 正在啟動區域專屬歷史回測與決策反思...")
     
+    # Extract price_regime and macro_regime from state with fallbacks
+    price_regime = None
+    macro_regime = None
+    if state and "analysis" in state and region_code in state["analysis"]:
+        price_regime = state["analysis"][region_code].get("price_regime")
+        macro_regime = state["analysis"][region_code].get("macro_regime")
+        
+    if not price_regime:
+        try:
+            from core.regime.price_regime import detect_region as detect_price_regime
+            price_info = detect_price_regime(region_code)
+            price_regime = price_info.get("regime", "MOMENTUM_TREND")
+        except Exception:
+            price_regime = "MOMENTUM_TREND"
+            
+    if not macro_regime:
+        try:
+            from core.regime.registry import get_macro_regime
+            macro_regime_info = get_macro_regime(region_code)
+            macro_regime = macro_regime_info.get("regime", "BULL_RISK_ON") if isinstance(macro_regime_info, dict) else macro_regime_info
+        except Exception:
+            macro_regime = "BULL_RISK_ON"
+            
     # 1. Get region-specific benchmark performance
     benchmark = yf_tool.get_benchmark_performance(region_code)
     
@@ -258,7 +289,12 @@ def run_regional_reflection(region_code: str, report_date: str) -> str:
         
     # 4. Run Reflection Agent
     reflection_agent = ReflectionAgent()
-    reflection_report = reflection_agent.analyze(recent_recs, benchmark)
+    reflection_report = reflection_agent.analyze(
+        recent_recs,
+        benchmark,
+        price_regime=price_regime,
+        macro_regime=macro_regime
+    )
     
     # [Prompt Evolution Integration] Log ReflectionAgent's inference
     try:
@@ -508,9 +544,9 @@ def run_report_pipeline(args, report_date, regions_list, timestamp_suffix, daily
 
     phases_to_run = [
         "portfolio_check",
-        "portfolio_reflect",
         "analyze_macro",
         "analyze_sectors",
+        "portfolio_reflect",
         "screen_targets",
         "analyze_stocks",
         "weekly_report",
@@ -982,7 +1018,7 @@ def run_portfolio_check_phase(report_date: str, regions_list: list = None):
 
 def run_reflection_phase(regions_list: list, report_date: str, state: dict):
     print_info("==================================================")
-    print_info(f"[Phase 2/10] 歷史交易戰術反思 (portfolio_reflect)")
+    print_info(f"[Phase 4/10] 歷史交易戰術反思 (portfolio_reflect)")
     print_info("==================================================")
     if "reflection" not in state:
         state["reflection"] = {}
@@ -991,7 +1027,7 @@ def run_reflection_phase(regions_list: list, report_date: str, state: dict):
         region_name = REGIONS[r_code]["name"]
         print_info(f"[{region_name}] 正在啟動區域專屬歷史回測與決策反思...")
         try:
-            directives = run_regional_reflection(r_code, report_date)
+            directives = run_regional_reflection(r_code, report_date, state)
             state["reflection"][r_code] = directives
             time.sleep(3)
         except Exception as ex:
@@ -1001,7 +1037,7 @@ def run_reflection_phase(regions_list: list, report_date: str, state: dict):
 
 def run_analyze_macro_phase(regions_list: list, report_date: str, state: dict):
     print_info("==================================================")
-    print_info(f"[Phase 3/10] 總體經濟情境分析 (analyze_macro)")
+    print_info(f"[Phase 2/10] 總體經濟情境分析 (analyze_macro)")
     print_info("==================================================")
     if "analysis" not in state:
         state["analysis"] = {}
@@ -1033,7 +1069,7 @@ def run_analyze_macro_phase(regions_list: list, report_date: str, state: dict):
 
 def run_analyze_sectors_phase(regions_list: list, report_date: str, state: dict):
     print_info("==================================================")
-    print_info(f"[Phase 4/10] 產業板塊資金流分析 (analyze_sectors)")
+    print_info(f"[Phase 3/10] 產業板塊資金流分析 (analyze_sectors)")
     print_info("==================================================")
     if "analysis" not in state:
         state["analysis"] = {}
@@ -1409,6 +1445,12 @@ def run_weekly_report_phase(regions_list: list, report_date: str, timestamp_suff
             candidate_summary=candidate_summary,
             portfolio_ledger=portfolio_ledger_context
         )
+        
+        # 防禦性清理：移除非 Markdown 主要內容的對話性問候贅語（如「好的，總編輯...」）
+        final_markdown = final_markdown.strip()
+        if "#" in final_markdown:
+            final_markdown = final_markdown[final_markdown.index("#"):]
+            
         print_info(f"[{region_name}] 總編輯生成的原始週報長度: {len(final_markdown)} 字元。")
         
         try:

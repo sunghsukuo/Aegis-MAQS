@@ -30,7 +30,6 @@ def extract_case_summary(response_text: str) -> str:
     return response_text[:300] + "..."
 
 
-
 class ReflectionAgent(BaseAgent):
     def __init__(self):
         super().__init__(
@@ -39,7 +38,7 @@ class ReflectionAgent(BaseAgent):
             system_instruction=SYSTEM_INSTRUCTION
         )
 
-    def analyze(self, historical_recs: list, benchmark_perf: dict) -> str:
+    def analyze(self, historical_recs: list, benchmark_perf: dict, price_regime: str = None, macro_regime: str = None) -> str:
         """Executes the backtest analysis and generates the self-reflection prompt for other agents."""
         
         # Build prompt formatting past recommendations
@@ -58,6 +57,21 @@ class ReflectionAgent(BaseAgent):
                 formatted_recs += f"   推薦日期: {rec['report_date']} | 推薦價: {rec['recommend_price']:.2f} | 停損位: {rec.get('stop_loss', 0):.2f} | 目標價: {rec.get('target_price', 0):.2f}\n"
                 formatted_recs += f"   目前價格: {rec.get('current_price', 0):.2f} | 即時回報率: {roi_str} | 狀態: {status_str}\n\n"
                 
+        strategy_info = ""
+        if price_regime and macro_regime:
+            price_regime_upper = price_regime.upper()
+            if "REVERSION" in price_regime_upper or "RANGEBOUND" in price_regime_upper or price_regime_upper == "MEAN_REVERSION_RANGE":
+                strategy_name = "均值回歸拉回策略 (Mean Reversion - 尋找拉回支撐點買入)"
+            else:
+                strategy_name = "趨勢動量策略 (Momentum - 突破追逐強勢股)"
+                
+            strategy_info = f"""
+【本週預計執行之選股策略與宏觀情境環境設定】：
+* 本週定量大盤總經狀態 (Macro Regime): {macro_regime}
+* 本週定量大盤價格氣候 (Price Regime): {price_regime}
+* 本週選股策略模式：{strategy_name}
+"""
+                
         prompt = f"""
 請針對本系統歷史的投資推薦列表進行深度回測與決策反思。
 
@@ -66,11 +80,12 @@ class ReflectionAgent(BaseAgent):
 * 大盤當前價格: {benchmark_perf.get('current_price', 0):,.2f}
 * 大盤週報酬率: {benchmark_perf.get('weekly_return', 0)*100:.2f}%
 * 大盤月報酬率: {benchmark_perf.get('monthly_return', 0)*100:.2f}%
-
+{strategy_info}
 【歷史推薦標的當前表現數據】：
 {formatted_recs}
 
-請依據上述的歷史真實損益數據，進行冷酷客觀的回測與反思，並產出給本週分析師的「自我修正調整令」。
+請依據上述的歷史真實損益數據，結合本週即將採用的「選股策略模式」（若有提供），進行冷酷客觀的回測與反思，並產出給本週分析師的「自我修正調整令」。
+例如，若本週量化確定為「均值回歸策略」，且歷史上我們的均值回歸交易曾因為買入過早而蒙受損失，您應該下令「收緊季線附近的買入緩衝區間」或「加強債務比率過濾」以輔助本週策略，而不是下令去跑動量突破。
 """
         return self.run(prompt)
 
@@ -79,7 +94,7 @@ class ReflectionAgent(BaseAgent):
         """
         自適應 Prompt 演化引擎 (Self-Reflective Prompt Optimization Engine)
         分析最近的已平倉交易紀錄與其實際投資績效 (ROI)，
-        針對表現欠佳或估值失真的 FundamentalAgent 進行 Prompt 自我演化與版本升級。
+        針對表現欠佳或估值失真 FundamentalAgent 進行 Prompt 自我演化與版本升級。
         """
         cls.evolve_prompts_core(dry_run=False)
 
@@ -348,4 +363,3 @@ class ReflectionAgent(BaseAgent):
         except Exception as e:
             print(f"[!] [自適應 Prompt 演化] Prompt 演化中途出錯: {e}")
             raise e
-
