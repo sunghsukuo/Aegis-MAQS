@@ -233,7 +233,7 @@ class ValuationEngine:
                 execute_sql(cursor, query_sqlite, query_mysql, (ticker,))
                 row = cursor.fetchone()
                 if row:
-                    sector_id = row[0] if isinstance(row, tuple) else row.get("sector_id")
+                    sector_id = row[0] if isinstance(row, (tuple, list)) else (row.get("sector_id") if isinstance(row, dict) else row["sector_id"])
                     execute_sql(
                         cursor,
                         "SELECT ticker, company_name FROM sector_constituents WHERE sector_id = ? AND ticker != ? LIMIT 4",
@@ -241,8 +241,8 @@ class ValuationEngine:
                         (sector_id, ticker)
                     )
                     for peer_row in cursor.fetchall():
-                        p_ticker = peer_row[0] if isinstance(peer_row, tuple) else peer_row.get("ticker")
-                        p_name = peer_row[1] if isinstance(peer_row, tuple) else peer_row.get("company_name")
+                        p_ticker = peer_row[0] if isinstance(peer_row, (tuple, list)) else (peer_row.get("ticker") if isinstance(peer_row, dict) else peer_row["ticker"])
+                        p_name = peer_row[1] if isinstance(peer_row, (tuple, list)) else (peer_row.get("company_name") if isinstance(peer_row, dict) else peer_row["company_name"])
                         
                         # Populate Chinese stock names dynamically for Taiwan stocks
                         if not p_name:
@@ -313,10 +313,12 @@ class ValuationEngine:
 - 台股：上市代號加上 .TW (例如 2303.TW)，上櫃代號加上 .TWO (例如 5274.TWO)
 - 韓股：代號加上 .KS (例如 005930.KS)
 - 其他市場比照 Yahoo Finance 標準代碼格式。
+- ⚠️特別警告：在 "ticker" 欄位中必須填寫標準的 Yahoo Finance 股票代號（Ticker），絕對不可填寫公司完整名稱（例如：不准填寫 'Samsung Electronics Co., Ltd.', 'SK Hynix Inc.', 'Western Digital Corporation'，而必須填寫 '005930.KS', '000660.KS', 'WDC'）。
 """
                 response_text = agent.run(prompt)
                 if response_text:
                     import json
+                    import re
                     clean_text = response_text.strip()
                     # Defensive parsing to strip markdown backticks if any
                     if clean_text.startswith("```"):
@@ -332,11 +334,14 @@ class ValuationEngine:
                         valid_llm_peers = []
                         for p in llm_peers:
                             if isinstance(p, dict) and "ticker" in p and "name" in p:
-                                if p["ticker"].upper() != ticker.upper():
-                                    valid_llm_peers.append({
-                                        "ticker": p["ticker"],
-                                        "name": p["name"]
-                                    })
+                                p_ticker = p["ticker"].strip().upper()
+                                # Validation defense: Must not be empty, must be <= 12 chars, no spaces, only allowed characters
+                                if p_ticker and p_ticker != ticker.upper() and " " not in p_ticker and len(p_ticker) <= 12:
+                                    if re.match(r"^[A-Z0-9.\-^:]+$", p_ticker):
+                                        valid_llm_peers.append({
+                                            "ticker": p_ticker,
+                                            "name": p["name"]
+                                        })
                         peers = valid_llm_peers
                         print(f"[✓] 成功利用大模型檢索到 {ticker} 的全球同業: {[p['ticker'] for p in peers]}")
             except Exception as e:
@@ -539,7 +544,7 @@ class ValuationEngine:
             return f"{val:,.2f} {currency}"
 
         # DCF Output
-        report.append("### I. 5年期現金流量折現模型 (Discounted Cash Flow Model)")
+        report.append("### I. 5年期現金流量折現模型 (Discounted Cash Flow Model) - 僅供參考")
         if dcf_res["status"] == "success":
             report.append(f"*   **WACC（加權平均資金成本）**: `{dcf_res['wacc']*100:.2f}%` ")
             report.append(f"    *   *股權權重/成本*: `{dcf_res['w_equity']*100:.1f}%` / `{dcf_res['cost_of_equity']*100:.2f}%` (CAPM 模型)")
@@ -550,7 +555,7 @@ class ValuationEngine:
             report.append(f"*   **企業價值 (Enterprise Value)**: `{fmt_money(dcf_res['enterprise_value'])}` ")
             report.append(f"    *   加上現金或等價物: `{fmt_money(dcf_res['cash'])}`，扣除總債務: `{fmt_money(dcf_res['debt'])}` ")
             report.append(f"*   **股權價值 (Equity Value)**: `{fmt_money(dcf_res['equity_value'])}` ")
-            report.append(f"*   **DCF 估值之內在合理股價**: **`{dcf_res['intrinsic_value']:.2f} {currency}`** ")
+            report.append(f"*   **DCF 估值之內在合理股價**: **`{dcf_res['intrinsic_value']:.2f} {currency}` (僅供參考)** ")
             report.append(f"    *   較目前價格偏離幅度: **`{((dcf_res['intrinsic_value'] - curr_price)/curr_price)*100:+.2f}%`**")
         else:
             report.append(f"*   **DCF模型狀態**: `不適用` ")
@@ -559,11 +564,16 @@ class ValuationEngine:
         # Comps Output
         report.append("\n### II. 同業乘數比較模型 (Comparables Analysis)")
         if comps_res["status"] == "success":
+            t_pe = financials.get("pe_ratio")
+            t_pe_str = f"{t_pe:.2f} 倍" if t_pe is not None else "N/A"
+            t_pb = financials.get("price_to_book")
+            t_pb_str = f"{t_pb:.2f} 倍" if t_pb is not None else "N/A"
+            
             report.append(f"*   **同行業競爭對手平均估值倍數**: ")
             if comps_res['avg_pe']:
-                report.append(f"    *   *同業平均 P/E (本益比)*: `{comps_res['avg_pe']:.2f} 倍` (目標 PE: `{financials.get('pe_ratio', 0):.2f} 倍`) ")
+                report.append(f"    *   *同業平均 P/E (本益比)*: `{comps_res['avg_pe']:.2f} 倍` (目標 PE: `{t_pe_str}`) ")
             if comps_res['avg_pb']:
-                report.append(f"    *   *同業平均 P/B (股價淨值比)*: `{comps_res['avg_pb']:.2f} 倍` (目標 PB: `{financials.get('price_to_book', 0):.2f} 倍`) ")
+                report.append(f"    *   *同業平均 P/B (股價淨值比)*: `{comps_res['avg_pb']:.2f} 倍` (目標 PB: `{t_pb_str}`) ")
             report.append(f"*   **同業估值乘數詳情**: ")
             for p in comps_res["peer_valuations"]:
                 pe_str = f"{p['pe']:.2f}x" if p["pe"] else "N/A"
@@ -588,21 +598,27 @@ class ValuationEngine:
 
         # Overall Summary
         report.append("\n### IV. 投行量化估值總結 (Valuation Summary)")
-        valid_valuations = []
-        if dcf_res["status"] == "success":
-            valid_valuations.append(dcf_res["intrinsic_value"])
+        # Under user instruction, the final integrated Fair Price is based ONLY on the Comparable multiples model (Comps).
+        # The DCF model is listed for reference only.
         if comps_res["status"] == "success":
-            valid_valuations.append(comps_res["intrinsic_value"])
-            
-        if valid_valuations:
-            final_fair_price = sum(valid_valuations) / len(valid_valuations)
+            final_fair_price = comps_res["intrinsic_value"]
             diff = ((final_fair_price - curr_price) / curr_price) * 100
             diff_str = f"{diff:+.2f}%"
             bias_str = "「被低估」" if diff > 5 else ("「被高估」" if diff < -5 else "「估值合理」")
             
             report.append(f"*   **投行綜合內在合理價 (Fair Price)**: **`{final_fair_price:.2f} {currency}`** ")
             report.append(f"*   **目前價格與合理價之偏離幅度**: **`{diff_str}`** (目前價格處於 **{bias_str}** 區間) ")
-            report.append(f"    *(備註: 此合理價為 DCF 估值法與同業比較乘數法之數學算術平均數。)* ")
+            report.append(f"    *(備註: 此合理價以同業比較乘數估值為準，絕對估值 DCF 模型僅列出供參考。)* ")
+        elif dcf_res["status"] == "success":
+            # If comps is not available, fallback to DCF but mark as reference-only
+            final_fair_price = dcf_res["intrinsic_value"]
+            diff = ((final_fair_price - curr_price) / curr_price) * 100
+            diff_str = f"{diff:+.2f}%"
+            bias_str = "「被低估」" if diff > 5 else ("「被高估」" if diff < -5 else "「估值合理」")
+            
+            report.append(f"*   **投行綜合內在合理價 (Fair Price)**: **`{final_fair_price:.2f} {currency}` (僅供參考)** ")
+            report.append(f"*   **目前價格與合理價之偏離幅度**: **`{diff_str}`** (目前價格處於 **{bias_str}** 區間) ")
+            report.append(f"    *(備註: 同業比較不可用，此處合理價使用 DCF 模型推估，僅供參考。)* ")
         else:
             report.append("*   **無法計算綜合合理價**: 所有量化模型皆不適用。")
 

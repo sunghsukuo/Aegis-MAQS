@@ -330,11 +330,15 @@ def _get_stock_financials_raw(ticker: str) -> dict:
     with silence_all():
         try:
             info = t.info or {}
-        except Exception:
+        except Exception as e:
+            from core.tools.utils import log_error_details
+            log_error_details("yahoo_finance.py", f"t.info failed for {ticker}", e)
             info = {}
         try:
             fast_info = t.fast_info
-        except Exception:
+        except Exception as e:
+            from core.tools.utils import log_error_details
+            log_error_details("yahoo_finance.py", f"t.fast_info failed for {ticker}", e)
             fast_info = {}
         
         current_price = fast_info.get("lastPrice") or info.get("currentPrice") or info.get("regularMarketPrice")
@@ -344,7 +348,9 @@ def _get_stock_financials_raw(ticker: str) -> dict:
                 hist = t.history(period="1d").dropna(subset=["Close"])
                 if not hist.empty:
                     current_price = hist["Close"].iloc[-1]
-            except Exception:
+            except Exception as e:
+                from core.tools.utils import log_error_details
+                log_error_details("yahoo_finance.py", f"t.history fallback failed for {ticker}", e)
                 pass
                 
         if not current_price:
@@ -429,7 +435,9 @@ def get_stock_financials(ticker: str) -> dict:
         if data:
             save_to_cache(CACHE_DIR, cache_key, data)
         return data
-    except Exception:
+    except Exception as e:
+        from core.tools.utils import log_error_details
+        log_error_details("yahoo_finance.py", f"Failed to get stock financials for {ticker}", e)
         print(f"[!] Warning: {ticker} 財務資料獲取失敗，可能已下市或資料缺失。")
         return {}
 

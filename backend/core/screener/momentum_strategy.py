@@ -63,7 +63,9 @@ class MomentumScreener(BaseScreener):
                     from core.tools.yahoo_finance import silence_all
                     with silence_all():
                         name = t.info.get("longName", ticker)
-                except Exception:
+                except Exception as e:
+                    from core.tools.utils import log_error_details
+                    log_error_details("momentum_strategy.py", f"Failed to get longName for {ticker}", e)
                     pass
                 
                 if region == "Taiwan" or ticker.endswith(".TW") or ticker.endswith(".TWO"):

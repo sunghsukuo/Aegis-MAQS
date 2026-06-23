@@ -53,7 +53,16 @@ class ReflectionAgent(BaseAgent):
                     roi_val = 0.0
                 roi_str = f"+{roi_val*100:.2f}%" if roi_val >= 0 else f"{roi_val*100:.2f}%"
                 
+                hist_macro = rec.get('macro_regime') or "N/A"
+                hist_price = rec.get('price_regime') or "N/A"
+                hist_strat = "趨勢動量策略 (Momentum)"
+                if hist_price != "N/A":
+                    hp_upper = hist_price.upper()
+                    if "REVERSION" in hp_upper or "RANGEBOUND" in hp_upper or hp_upper == "MEAN_REVERSION_RANGE":
+                        hist_strat = "均值回歸拉回策略 (Mean Reversion)"
+                
                 formatted_recs += f"{i+1}. Ticker: {rec['ticker']} ({rec['company_name']})\n"
+                formatted_recs += f"   推薦時大盤氣候：總經 {hist_macro} | 價格 {hist_price} -> 採用 {hist_strat}\n"
                 formatted_recs += f"   推薦日期: {rec['report_date']} | 推薦價: {rec['recommend_price']:.2f} | 停損位: {rec.get('stop_loss', 0):.2f} | 目標價: {rec.get('target_price', 0):.2f}\n"
                 formatted_recs += f"   目前價格: {rec.get('current_price', 0):.2f} | 即時回報率: {roi_str} | 狀態: {status_str}\n\n"
                 
@@ -197,7 +206,7 @@ class ReflectionAgent(BaseAgent):
                     db.execute_sql(cursor, query_sqlite, query_mysql, (agent_name, curr_version))
                     row = cursor.fetchone()
                     if row:
-                        curr_prompt = row[0] if isinstance(row, (tuple, list)) else row.get("system_prompt")
+                        curr_prompt = row[0] if isinstance(row, (tuple, list)) else (row.get("system_prompt") if isinstance(row, dict) else row["system_prompt"])
                     else:
                         baseline_path = Path(__file__).resolve().parent.parent / "prompts" / "fundamental_agent_baseline.txt"
                         if baseline_path.exists():
@@ -345,7 +354,8 @@ class ReflectionAgent(BaseAgent):
                     ticker=None,
                     input_prompt=meta_optimizer.last_prompt,
                     output_response=new_prompt,
-                    prompt_version=curr_version
+                    prompt_version=curr_version,
+                    report_date=report_date
                 )
             else:
                 print(f"[✓] [自適應 Prompt 演化] [Dry-run 模式] 成功模擬演化新版 System Prompt，且已通過 QA 驗證！預計升級版本 {curr_version} -> {new_version}。")

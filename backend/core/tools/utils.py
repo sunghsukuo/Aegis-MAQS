@@ -33,12 +33,14 @@ def get_cached_data(cache_dir, cache_key: str, ttl_hours: int = 12) -> dict:
     Returns None if cache is expired, invalid, or missing.
     """
     import os
+    import sys
     import json
     from datetime import datetime, timedelta
     from pathlib import Path
     
-    # Bypass cache during backtests to prevent lookahead bias from real-time cached files
-    if os.environ.get("AEGIS_IN_BACKTEST") == "1":
+    # Bypass cache during backtests/unit tests to prevent lookahead bias or cache pollution
+    is_testing = "pytest" in sys.modules or "unittest" in sys.modules
+    if os.environ.get("AEGIS_IN_BACKTEST") == "1" or is_testing:
         return None
         
     cache_file = Path(cache_dir) / f"{cache_key}.json"
@@ -58,13 +60,21 @@ def get_cached_data(cache_dir, cache_key: str, ttl_hours: int = 12) -> dict:
         print(f"[!] Warning: Failed to read local cache {cache_key}: {e}")
         return None
 
+
 def save_to_cache(cache_dir, cache_key: str, data: dict):
     """
     Saves a dictionary as a local JSON file to act as database/network cache.
     """
+    import os
+    import sys
     import json
     from pathlib import Path
     
+    # Bypass cache saving during backtests/unit tests to prevent cache pollution
+    is_testing = "pytest" in sys.modules or "unittest" in sys.modules
+    if os.environ.get("AEGIS_IN_BACKTEST") == "1" or is_testing:
+        return
+        
     try:
         target_dir = Path(cache_dir)
         target_dir.mkdir(parents=True, exist_ok=True)
@@ -110,3 +120,79 @@ def rotate_log_file(log_file_path, max_bytes=10*1024*1024, backup_count=3):
         print(f"[✓] Log Rotator: Successfully rotated legacy log file: {log_path.name}")
     except Exception as e:
         print(f"[!] Log Rotator Warning: Failed to rotate log file {log_path.name}: {e}")
+
+def log_error_details(module_name: str, message: str, exception: Exception):
+    """
+    Defensively logs full exception traceback details to logs/error_details.log
+    to allow fast diagnosing without dirtying stdout/stderr logs.
+    """
+    import traceback
+    from datetime import datetime
+    from core.config import LOGS_DIR
+    
+    error_log_file = LOGS_DIR / "error_details.log"
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    tb_str = traceback.format_exc()
+    
+    try:
+        LOGS_DIR.mkdir(parents=True, exist_ok=True)
+        with open(error_log_file, "a", encoding="utf-8") as f:
+            f.write(f"=== [{timestamp}] [{module_name}] {message} ===\n")
+            f.write(f"Exception Type: {type(exception).__name__}\n")
+            f.write(f"Error Message: {str(exception)}\n")
+            f.write(f"Traceback:\n{tb_str}")
+            f.write("=" * 60 + "\n\n")
+    except Exception as le:
+        sys.stderr.write(f"[!] Warning: Failed to write to error_details.log: {le}\n")
+
+def clean_expired_cache(cache_dir, max_age_days=7):
+    """
+    Periodically cleans up old cache files from the cache directory.
+    Deletes files older than max_age_days:
+    - agent_cache_*.json
+    - financials_*.json
+    - price_regime_*.json
+    - pipeline_state_*.json
+    """
+    import os
+    import time
+    from pathlib import Path
+    import sys
+    
+    # Bypass during backtests or unit tests
+    is_testing = "pytest" in sys.modules or "unittest" in sys.modules
+    is_backtest = os.environ.get("AEGIS_IN_BACKTEST") == "1"
+    if is_testing or is_backtest:
+        return
+        
+    try:
+        cache_path = Path(cache_dir)
+        if not cache_path.exists():
+            return
+            
+        now = time.time()
+        max_age_seconds = max_age_days * 24 * 3600
+        deleted_count = 0
+        
+        # Target specific temporary cache prefixes to avoid deleting config files
+        target_prefixes = [
+            "agent_cache_", 
+            "financials_", 
+            "price_regime_", 
+            "pipeline_state_"
+        ]
+        
+        for file in cache_path.glob("*.json"):
+            if any(file.name.startswith(pref) for pref in target_prefixes):
+                try:
+                    mtime = file.stat().st_mtime
+                    if now - mtime > max_age_seconds:
+                        file.unlink()
+                        deleted_count += 1
+                except Exception as e:
+                    print(f"[!] Warning: Failed to delete old cache file {file.name}: {e}")
+                    
+        if deleted_count > 0:
+            print(f"[✓] Cache Cleanup: Automatically purged {deleted_count} expired cache files (> {max_age_days} days old).")
+    except Exception as e:
+        print(f"[!] Warning: Failed to run cache cleanup: {e}")

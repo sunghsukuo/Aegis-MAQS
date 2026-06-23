@@ -1,6 +1,7 @@
 import json
 import re
 import datetime
+import time
 from typing import Tuple, Optional
 from contextlib import contextmanager
 
@@ -37,9 +38,11 @@ def temp_sandbox_context():
     orig_yf_info = yf.Ticker.info
     orig_get_cached_data = utils.get_cached_data
     orig_sim_date = get_simulated_date()
+    orig_env_backtest = os.environ.get("AEGIS_IN_BACKTEST")
     
     try:
         # 2. Apply patches
+        os.environ["AEGIS_IN_BACKTEST"] = "1"
         apply_backtest_db_sandbox()
         apply_backtest_replayer_sandbox()
         yield
@@ -56,6 +59,10 @@ def temp_sandbox_context():
         utils.get_cached_data = orig_get_cached_data
         yf_tool.get_cached_data = orig_get_cached_data
         set_simulated_date(orig_sim_date)
+        if orig_env_backtest is not None:
+            os.environ["AEGIS_IN_BACKTEST"] = orig_env_backtest
+        else:
+            os.environ.pop("AEGIS_IN_BACKTEST", None)
         print("[🛡️ 回測沙盒] 臨時沙盒已關閉，生產環境連線已完全還原。")
 
 def run_structural_checks(candidate_prompt: str, active_prompt: str) -> Tuple[bool, str]:
@@ -108,17 +115,24 @@ def run_ab_replay_simulation(agent_name: str, candidate_prompt: str, active_prom
     total_win_cases = 0
     win_preserved = 0
     
-    for case in closed_cases:
+    for i, case in enumerate(closed_cases):
         ticker = case["ticker"]
         report_date = case["report_date"]
         actual_roi = case.get("performance") if case.get("performance") is not None else 0.0
         macro_regime = case.get("macro_regime", "VOLATILE_RANGEBOUND")
         price_regime = case.get("price_regime", "MOMENTUM_TREND")
         
+        # Introduce a sleep delay to prevent yfinance rate limits
+        if i > 0:
+            print(f"[*] 暫停 2 秒以防 yfinance 頻率限制 (Rate Limit)...")
+            time.sleep(2)
+            
         # Move simulated date to report_date to fetch historical metrics
+        print(f"   [⏳ A/B 模擬] 正在對 {ticker} (回測日期: {report_date}) 進行 A/B 對比測試...")
         set_simulated_date(report_date)
         financials = yf_tool.get_stock_financials(ticker)
         if not financials:
+            print(f"   [!] 找不到 {ticker} 的歷史財務資料，跳過。")
             continue
             
         # Run simulated analyses
@@ -139,14 +153,20 @@ def run_ab_replay_simulation(agent_name: str, candidate_prompt: str, active_prom
             
             if actual_roi < 0:
                 total_loss_cases += 1
-                # If Prompt B successfully avoided the buy (Hold/Sell) while A recommended Buy
-                if rating_b == "Hold":
+                is_success = (rating_b == "Hold")
+                if is_success:
                     loss_avoided += 1
+                res_str = "【成功避險】" if is_success else "【避險失敗】"
+                detail_str = f"實際 ROI 為負 ({actual_roi*100:.1f}%)，Candidate B 評級為 {rating_b} (Active A 為 {rating_a})"
             else:
                 total_win_cases += 1
-                # If Prompt B still recommended buying a winner
-                if rating_b == "Buy":
+                is_success = (rating_b == "Buy")
+                if is_success:
                     win_preserved += 1
+                res_str = "【成功保留獲利】" if is_success else "【未保留獲利】"
+                detail_str = f"實際 ROI 為正 ({actual_roi*100:.1f}%)，Candidate B 評級為 {rating_b} (Active A 為 {rating_a})"
+                
+            print(f"   [✓ A/B 結果] {ticker} -> {res_str} | {detail_str}")
         except Exception as ex:
             print(f"[!] 模擬分析 {ticker} 時出錯: {ex}")
             

@@ -567,6 +567,38 @@
                 "2467.TW"
             ]
         },
+        "00981A.TW": {
+            "name": "主動統一台股增長 (Active ETFs)",
+            "target_type": "proxy",
+            "is_etf": true,
+            "constituents": [
+                "00981A.TW"
+            ]
+        },
+        "00988A.TW": {
+            "name": "主動統一全球創新 (Active ETFs)",
+            "target_type": "proxy",
+            "is_etf": true,
+            "constituents": [
+                "00988A.TW"
+            ]
+        },
+        "00990A.TW": {
+            "name": "主動元大AI新經濟 (Active ETFs)",
+            "target_type": "proxy",
+            "is_etf": true,
+            "constituents": [
+                "00990A.TW"
+            ]
+        },
+        "00997A.TW": {
+            "name": "主動群益美國增長 (Active ETFs)",
+            "target_type": "proxy",
+            "is_etf": true,
+            "constituents": [
+                "00997A.TW"
+            ]
+        },
         "00632R.TW": {
             "name": "台灣50反一避險 (Taiwan 50 Inverse)",
             "target_type": "proxy",

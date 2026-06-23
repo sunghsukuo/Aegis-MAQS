@@ -12,44 +12,51 @@ def calculate_risk_boundaries(curr_price: float, atr_14: float, beta: float, mac
     
     # Adapt multipliers based on regime
     if "BEAR" in regime or "RISK_OFF" in regime:
-        # Bear Market / Risk Off: tightest defensive parameters
-        k1 = 1.0 * beta_adj
-        k2 = 1.2 * beta_adj
+        # Bear Market / Risk Off: tightest defensive parameters (盈虧比 1.50x)
+        k1 = 1.5 * beta_adj
+        k2 = 2.25 * beta_adj
         buy_lower_multiplier = 0.5 * beta_adj
         buy_upper_multiplier = 0.1 * beta_adj
     elif "REVERSION" in regime or "RANGEBOUND" in regime or regime == "MEAN_REVERSION_RANGE":
-        # Mean Reversion / Rangebound: tighter profit targets & tight stop-loss
-        k1 = 1.2 * beta_adj
-        k2 = 1.5 * beta_adj
+        # Mean Reversion / Rangebound: standard range trading (盈虧比 1.50x)
+        k1 = 2.0 * beta_adj
+        k2 = 3.0 * beta_adj
         buy_lower_multiplier = 0.8 * beta_adj
         buy_upper_multiplier = 0.2 * beta_adj
     else:
-        # Momentum / Trend: standard alpha seeking
-        k1 = 2.0 * beta_adj
-        k2 = 3.0 * beta_adj
+        # Momentum / Trend: standard alpha seeking (盈虧比 2.00x)
+        k1 = 2.5 * beta_adj
+        k2 = 5.0 * beta_adj
         buy_lower_multiplier = 1.0 * beta_adj
         buy_upper_multiplier = 0.25 * beta_adj
         
     if atr_14 and curr_price:
         suggested_sl = curr_price - (k1 * atr_14)
         suggested_tp = curr_price + (k2 * atr_14)
+        
+        # Enforce a minimum stop-loss floor percentage to prevent whip-saws on minor market noise
+        min_sl_pct = 0.05 if ("BEAR" in regime or "RISK_OFF" in regime or "REVERSION" in regime or "RANGEBOUND" in regime) else 0.07
+        min_sl_dist = curr_price * min_sl_pct
+        if (curr_price - suggested_sl) < min_sl_dist:
+            suggested_sl = curr_price - min_sl_dist
+            
         suggested_buy_lower = curr_price - (buy_lower_multiplier * atr_14)
         suggested_buy_upper = curr_price + (buy_upper_multiplier * atr_14)
     else:
         # Fallbacks if metrics are missing
         if "BEAR" in regime or "RISK_OFF" in regime:
-            suggested_sl = curr_price * 0.97  # 3% stop-loss
-            suggested_tp = curr_price * 1.04  # 4% target price
+            suggested_sl = curr_price * 0.95  # 5% stop-loss
+            suggested_tp = curr_price * 1.08  # 8% target price
             suggested_buy_lower = curr_price * 0.99
             suggested_buy_upper = curr_price * 1.005
         elif "REVERSION" in regime or "RANGEBOUND" in regime or regime == "MEAN_REVERSION_RANGE":
-            suggested_sl = curr_price * 0.95  # 5% stop-loss
-            suggested_tp = curr_price * 1.08  # 8% target price
+            suggested_sl = curr_price * 0.93  # 7% stop-loss
+            suggested_tp = curr_price * 1.12  # 12% target price
             suggested_buy_lower = curr_price * 0.98
             suggested_buy_upper = curr_price * 1.01
         else:
-            suggested_sl = curr_price * 0.92  # 8% stop-loss
-            suggested_tp = curr_price * 1.15  # 15% target price
+            suggested_sl = curr_price * 0.90  # 10% stop-loss
+            suggested_tp = curr_price * 1.20  # 20% target price
             suggested_buy_lower = curr_price * 0.97
             suggested_buy_upper = curr_price * 1.02
             

@@ -285,7 +285,8 @@ class BacktestEngine:
                             ticker=ticker,
                             input_prompt=fundamental_agent.last_prompt,
                             output_response=stock_report,
-                            prompt_version=fundamental_agent.prompt_version
+                            prompt_version=fundamental_agent.prompt_version,
+                            report_date=sim_date_str
                         )
                         print(f"   [✓] 買入下單：{ticker} (價格: {curr_price:.2f} | 股數: {shares:.2f} | 分配金額: {invested_amount:,.2f})")
                 else:

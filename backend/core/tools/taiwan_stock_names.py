@@ -13,6 +13,12 @@ def _should_sync() -> bool:
     Checks if a week (7 days) has passed since the last sync.
     7 days = 604,800 seconds.
     """
+    import sys
+    is_testing = "pytest" in sys.modules or "unittest" in sys.modules
+    is_backtest = os.environ.get("AEGIS_IN_BACKTEST") == "1"
+    if is_testing or is_backtest:
+        return False  # Never sync during tests or backtests
+        
     if not os.path.exists(LAST_SYNC_FILE):
         return True
     try:
@@ -76,7 +82,7 @@ def get_taiwan_stock_name(ticker_or_code: str) -> str:
         )
         row = cursor.fetchone()
         if row:
-            return row[0] if isinstance(row, tuple) else row.get("chinese_name")
+            return row[0] if isinstance(row, (tuple, list)) else (row.get("chinese_name") if isinstance(row, dict) else row["chinese_name"])
 
     # 2. Not found: trigger sync of TWSE/TPEx lists (checks weekly limit)
     if not hasattr(get_taiwan_stock_name, "_sync_attempted"):
@@ -97,7 +103,7 @@ def get_taiwan_stock_name(ticker_or_code: str) -> str:
                 )
                 row = cursor.fetchone()
                 if row:
-                    return row[0] if isinstance(row, tuple) else row.get("chinese_name")
+                    return row[0] if isinstance(row, (tuple, list)) else (row.get("chinese_name") if isinstance(row, dict) else row["chinese_name"])
         except Exception as e:
             print(f"[!] Warning: Failed to sync Taiwan stock names from TWSE: {e}")
         
@@ -183,8 +189,8 @@ def _query_local_db(query_str: str) -> dict:
             )
             row = cursor.fetchone()
             if row:
-                name_zh = row[0] if isinstance(row, tuple) else row.get("chinese_name")
-                mtype = row[1] if isinstance(row, tuple) else row.get("market_type")
+                name_zh = row[0] if isinstance(row, (tuple, list)) else (row.get("chinese_name") if isinstance(row, dict) else row["chinese_name"])
+                mtype = row[1] if isinstance(row, (tuple, list)) else (row.get("market_type") if isinstance(row, dict) else row["market_type"])
                 return {
                     "ticker": f"{query_str}.{mtype}",
                     "region": "Taiwan",
@@ -212,12 +218,14 @@ def _query_local_db(query_str: str) -> dict:
                 )
                 rows = cursor.fetchall()
                 if rows:
-                    row = min(rows, key=lambda r: len(r[2] if isinstance(r, tuple) else r.get("chinese_name")))
+                    def _get_name(r):
+                        return r[2] if isinstance(r, (tuple, list)) else (r.get("chinese_name") if isinstance(r, dict) else r["chinese_name"])
+                    row = min(rows, key=lambda r: len(_get_name(r)))
 
         if row:
-            code = row[0] if isinstance(row, tuple) else row.get("stock_code")
-            mtype = row[1] if isinstance(row, tuple) else row.get("market_type")
-            name_zh = row[2] if isinstance(row, tuple) else row.get("chinese_name")
+            code = row[0] if isinstance(row, (tuple, list)) else (row.get("stock_code") if isinstance(row, dict) else row["stock_code"])
+            mtype = row[1] if isinstance(row, (tuple, list)) else (row.get("market_type") if isinstance(row, dict) else row["market_type"])
+            name_zh = row[2] if isinstance(row, (tuple, list)) else (row.get("chinese_name") if isinstance(row, dict) else row["chinese_name"])
             return {
                 "ticker": f"{code}.{mtype}",
                 "region": "Taiwan",

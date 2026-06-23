@@ -4,10 +4,21 @@ from core.config import CACHE_DIR
 
 REGIME_CACHE_FILE = CACHE_DIR / "macro_regime.json"
 
+_in_memory_regimes = {}
+
 def save_macro_regime(region_code: str, regime_info: dict):
     """
     Saves the detected macro regime info for a region into the cache file.
     """
+    import os
+    import sys
+    is_testing = "pytest" in sys.modules or "unittest" in sys.modules
+    is_backtest = os.environ.get("AEGIS_IN_BACKTEST") == "1"
+    
+    if is_testing or is_backtest:
+        _in_memory_regimes[region_code] = regime_info
+        return
+        
     data = {}
     if REGIME_CACHE_FILE.exists():
         try:
@@ -30,6 +41,15 @@ def get_macro_regime(region_code: str) -> dict:
     Retrieves the cached macro regime for a region.
     Defaults to VOLATILE_RANGEBOUND if not cached or failed.
     """
+    import os
+    import sys
+    is_testing = "pytest" in sys.modules or "unittest" in sys.modules
+    is_backtest = os.environ.get("AEGIS_IN_BACKTEST") == "1"
+    
+    if is_testing or is_backtest:
+        if region_code in _in_memory_regimes:
+            return _in_memory_regimes[region_code]
+            
     if REGIME_CACHE_FILE.exists():
         try:
             with open(REGIME_CACHE_FILE, "r", encoding="utf-8") as f:

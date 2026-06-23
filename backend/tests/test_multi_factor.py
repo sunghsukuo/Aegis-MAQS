@@ -17,6 +17,8 @@ class TestMultiFactorRegime(unittest.TestCase):
                 f.unlink()
             except Exception:
                 pass
+        from core.regime.multi_factor import _in_memory_meso_regimes
+        _in_memory_meso_regimes.clear()
 
     def tearDown(self):
         from core.config import CACHE_DIR
@@ -25,6 +27,8 @@ class TestMultiFactorRegime(unittest.TestCase):
                 f.unlink()
             except Exception:
                 pass
+        from core.regime.multi_factor import _in_memory_meso_regimes
+        _in_memory_meso_regimes.clear()
                 
     def test_vix_scale_calculation(self):
         # Base VIX is 15.0

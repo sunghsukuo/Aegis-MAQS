@@ -64,6 +64,8 @@ def get_vix_scale(vix_val: float) -> float:
     scale = 15.0 / vix_val
     return float(max(0.3, min(scale, 1.2)))
 
+_in_memory_meso_regimes = {}
+
 def detect_meso_regime(region_code: str = "US", force_refresh: bool = False) -> dict:
     """
     Detects the Meso-level (middle-tier) market regime using multi-index data.
@@ -73,17 +75,26 @@ def detect_meso_regime(region_code: str = "US", force_refresh: bool = False) -> 
       - VOLATILE_PANIC  (High Volatility Panic/Rangebound)
       - BEAR_RISK_OFF   (Systemic Downtrend)
     """
+    import os
+    import sys
+    is_testing = "pytest" in sys.modules or "unittest" in sys.modules
+    is_backtest = os.environ.get("AEGIS_IN_BACKTEST") == "1"
+    
     cache_file = get_meso_cache_file(region_code)
     
     # Check cache first
-    if not force_refresh and cache_file.exists():
-        try:
-            mtime = cache_file.stat().st_mtime
-            if time.time() - mtime < 300:  # 5 minutes cache
-                with open(cache_file, "r", encoding="utf-8") as f:
-                    return json.load(f)
-        except Exception:
-            pass
+    if not force_refresh:
+        if is_testing or is_backtest:
+            if region_code in _in_memory_meso_regimes:
+                return _in_memory_meso_regimes[region_code]
+        elif cache_file.exists():
+            try:
+                mtime = cache_file.stat().st_mtime
+                if time.time() - mtime < 300:  # 5 minutes cache
+                    with open(cache_file, "r", encoding="utf-8") as f:
+                        return json.load(f)
+            except Exception:
+                pass
 
     if region_code == "Taiwan":
         default_result = {
@@ -227,6 +238,10 @@ def detect_meso_regime(region_code: str = "US", force_refresh: bool = False) -> 
             "risk_appetite": latest_appetite,
             "gspc_trend": gspc_trend
         }
+        
+    if is_testing or is_backtest:
+        _in_memory_meso_regimes[region_code] = result
+        return result
         
     try:
         with open(cache_file, "w", encoding="utf-8") as f:

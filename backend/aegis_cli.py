@@ -54,8 +54,21 @@ def main():
         from core.config import LOGS_DIR
         from core.tools.utils import rotate_log_file
         rotate_log_file(LOGS_DIR / "generate_report.log", max_bytes=10*1024*1024)
+        
+        # Automatically clear error_details.log on startup to prevent pollution from previous runs
+        error_log = LOGS_DIR / "error_details.log"
+        if error_log.exists():
+            error_log.unlink()
     except Exception as le:
-        print(f"[!] Log Rotator Failure: {le}")
+        print(f"[!] Log Initialization Failure: {le}")
+        
+    # Clean expired cache files defensively on startup to prevent disk space exhaustion
+    try:
+        from core.config import CACHE_DIR
+        from core.tools.utils import clean_expired_cache
+        clean_expired_cache(CACHE_DIR, max_age_days=7)
+    except Exception as ce:
+        print(f"[!] Cache Cleanup Failure on Startup: {ce}")
     
     # Generate timestamp suffix to synchronize all output filenames and DB records
     timestamp_suffix = datetime.now().strftime("%H%M%S")

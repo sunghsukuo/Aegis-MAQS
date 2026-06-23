@@ -198,7 +198,8 @@ def research_and_track_asset(
                     ticker=ticker,
                     input_prompt=fundamental_agent.last_prompt,
                     output_response=stock_report,
-                    prompt_version=fundamental_agent.prompt_version
+                    prompt_version=fundamental_agent.prompt_version,
+                    report_date=report_date
                 )
                 db.save_agent_inference_log(
                     rec_id=rec_id,
@@ -206,7 +207,8 @@ def research_and_track_asset(
                     ticker=ticker,
                     input_prompt=news_agent.last_prompt,
                     output_response=news_analysis,
-                    prompt_version=news_agent.prompt_version
+                    prompt_version=news_agent.prompt_version,
+                    report_date=report_date
                 )
             except Exception as log_ex:
                 print(f"[!] Warning: 記錄 Fundamental/News 推論日誌失敗: {log_ex}")
@@ -304,7 +306,8 @@ def run_regional_reflection(region_code: str, report_date: str, state: dict = No
             ticker=None,
             input_prompt=reflection_agent.last_prompt,
             output_response=reflection_report,
-            prompt_version=reflection_agent.prompt_version
+            prompt_version=reflection_agent.prompt_version,
+            report_date=report_date
         )
     except Exception as log_ex:
         print(f"[!] Warning: 記錄 ReflectionAgent 推論日誌失敗: {log_ex}")
@@ -312,7 +315,7 @@ def run_regional_reflection(region_code: str, report_date: str, state: dict = No
     print_success(f"[{region_code}] 區域專屬決策反思分析完成！")
     return reflection_report
 
-def analyze_macro_regime(region_code: str, dry_run: bool = False) -> tuple:
+def analyze_macro_regime(region_code: str, price_info: dict = None, dry_run: bool = False, report_date: str = None) -> tuple:
     """
     Executes Macroeconomic Analysis via MacroAgent, logs the inference (unless dry_run),
     and returns (macro_report, macro_regime).
@@ -327,7 +330,7 @@ def analyze_macro_regime(region_code: str, dry_run: bool = False) -> tuple:
     # 3. Run Macro Agent
     print_info(f"[{region_name}] 正在執行總體經濟分析...")
     macro_agent = MacroAgent()
-    raw_macro_report = macro_agent.analyze(region_name, benchmark_data, macro_news)
+    raw_macro_report = macro_agent.analyze(region_name, benchmark_data, macro_news, price_info=price_info)
     
     # [Prompt Evolution Integration] Log MacroAgent's inference
     if not dry_run:
@@ -338,7 +341,8 @@ def analyze_macro_regime(region_code: str, dry_run: bool = False) -> tuple:
                 ticker=None,
                 input_prompt=macro_agent.last_prompt,
                 output_response=raw_macro_report,
-                prompt_version=macro_agent.prompt_version
+                prompt_version=macro_agent.prompt_version,
+                report_date=report_date
             )
         except Exception as log_ex:
             print(f"[!] Warning: 記錄 MacroAgent 推論日誌失敗: {log_ex}")
@@ -364,14 +368,14 @@ def run_regional_analysis(region_code: str, report_date: str, reflection_directi
     print_info(f"==================================================")
     print_info(f"開始分析區域市場：{region_name} ({region_code})...")
     
-    # Run macroeconomic analysis & extract macro regime
-    macro_report, macro_regime = analyze_macro_regime(region_code)
-    
-    # Detect price regime (quantitative ADX/Hurst) for screener strategy routing
+    # Detect price regime (quantitative ADX/Hurst) first to anchor macro analysis
     from core.regime.price_regime import detect_region as detect_price_regime
     price_info = detect_price_regime(region_code)
     price_regime = price_info.get("regime", "MOMENTUM_TREND")
     print_info(f"[{region_name}] 偵測到價格氣候 (Price Regime): {price_regime} (ADX={price_info.get('adx', 'N/A'):.1f}, Hurst={price_info.get('hurst', 'N/A'):.2f})")
+    
+    # Run macroeconomic analysis & extract macro regime
+    macro_report, macro_regime = analyze_macro_regime(region_code, price_info=price_info, report_date=report_date)
     
     # 4. Get Sector Rankings
     sector_rankings = yf_tool.get_sector_rankings(region_code)
@@ -418,7 +422,8 @@ def run_regional_analysis(region_code: str, report_date: str, reflection_directi
             ticker=None,
             input_prompt=market_agent.last_prompt,
             output_response=market_report,
-            prompt_version=market_agent.prompt_version
+            prompt_version=market_agent.prompt_version,
+            report_date=report_date
         )
     except Exception as log_ex:
         print(f"[!] Warning: 記錄 MarketAgent 推論日誌失敗: {log_ex}")
@@ -941,7 +946,8 @@ def run_prompt_evolution_test():
                 ticker="NVDA",
                 input_prompt="當前總經：BULL_RISK_ON\n基本面：EPS 成長 50%，本益比 35 倍，負債比 20%",
                 output_response="基本面分析：NVIDIA 獲利能力極強，毛利率高於 70%，受惠 AI 強勁需求。操作指引：目標價 115 元，停損點 92 元，建議持倉 20%。",
-                prompt_version=active_prompt["version"] if active_prompt else "v1.0.0"
+                prompt_version=active_prompt["version"] if active_prompt else "v1.0.0",
+                report_date="2026-05-01"
             )
             
             db.save_agent_inference_log(
@@ -950,7 +956,8 @@ def run_prompt_evolution_test():
                 ticker="INTC",
                 input_prompt="當前總經：BEAR_RISK_OFF\n基本面：EPS 成長 -20%，本益比 40 倍，負債比 65%",
                 output_response="基本面分析：Intel 面臨重重挑戰，雖本益比高企且成長衰退，但基於晶片法案補貼，給予買入評級。操作指引：目標價 34.5 元，停損點 27.6 元，建議持倉 10%。",
-                prompt_version=active_prompt["version"] if active_prompt else "v1.0.0"
+                prompt_version=active_prompt["version"] if active_prompt else "v1.0.0",
+                report_date="2026-05-01"
             )
             print_success("成功注入 2 筆測試用交易紀錄！現在啟動自適應 Prompt 演化引擎...")
         
@@ -1048,20 +1055,26 @@ def run_analyze_macro_phase(regions_list: list, report_date: str, state: dict):
         if r_code not in state["analysis"]:
             state["analysis"][r_code] = {}
         
-        macro_report, macro_regime = analyze_macro_regime(r_code)
+        # Detect price regime (quantitative ADX/Hurst) first to anchor macro analysis
+        from core.regime.price_regime import detect_region as detect_price_regime
+        price_info = detect_price_regime(r_code)
+        price_regime = price_info.get("regime", "MOMENTUM_TREND")
+        
+        macro_report, macro_regime = analyze_macro_regime(r_code, price_info=price_info, report_date=report_date)
         
         try:
             from core.regime.registry import save_macro_regime
             save_macro_regime(r_code, {
                 "regime": macro_regime,
-                "adx": 20.0,
-                "hurst": 0.50,
+                "adx": price_info.get("adx", 20.0),
+                "hurst": price_info.get("hurst", 0.50),
                 "ticker": "^GSPC" if r_code == "US" else "^TWII"
             })
             print_info(f"[{r_code}] 成功將總經市場情境標籤 {macro_regime} 寫入快取。")
         except Exception as reg_ex:
             print_error(f"[{r_code}] 無法將市場情境寫入快取: {reg_ex}")
             
+        state["analysis"][r_code]["price_regime"] = price_regime
         state["analysis"][r_code]["macro_report"] = macro_report
         state["analysis"][r_code]["macro_regime"] = macro_regime
         time.sleep(3)
@@ -1136,7 +1149,8 @@ def run_analyze_sectors_phase(regions_list: list, report_date: str, state: dict)
                 ticker=None,
                 input_prompt=market_agent.last_prompt,
                 output_response=market_report,
-                prompt_version=market_agent.prompt_version
+                prompt_version=market_agent.prompt_version,
+                report_date=report_date
             )
         except Exception as log_ex:
             print(f"[!] Warning: 記錄 MarketAgent 推論日誌失敗: {log_ex}")
@@ -1364,6 +1378,7 @@ def run_weekly_report_phase(regions_list: list, report_date: str, timestamp_suff
             
         # Build transaction execution ledger details for the WriterAgent
         buys_summary = []
+        blocked_buys_summary = []
         sells_summary = []
         try:
             with db.db_session() as conn:
@@ -1388,17 +1403,51 @@ def run_weekly_report_phase(regions_list: list, report_date: str, timestamp_suff
                     shares = rec["shares"]
                     amount = rec["invested_amount"]
                     
-                    # If shares > 0, it means we actually had capital and executed a buy
-                    if shares > 0:
-                        weight_pct = 5.0 if rating == "Hold" else 15.0 if rating == "Buy" else 25.0 if rating == "Strong Buy" else 0.0
-                        buys_summary.append(
-                            f"- **買入建倉 {name} ({ticker})**:\n"
-                            f"  - 評級: {rating}\n"
-                            f"  - 交易單價: {price_symbol}{rec_price:.2f}\n"
-                            f"  - 買入股數: {shares:.1f} 股\n"
-                            f"  - 投入金額: {price_symbol}{amount:.2f}\n"
-                            f"  - 當前持倉權重: {weight_pct:.1f}%"
-                        )
+                    if rating in ["Buy", "Strong Buy", "Hold"]:
+                        # If shares > 0, it means we actually had capital and executed a buy
+                        if shares > 0:
+                            weight_pct = 5.0 if rating == "Hold" else 15.0 if rating == "Buy" else 25.0 if rating == "Strong Buy" else 0.0
+                            buys_summary.append(
+                                f"- **買入建倉 {name} ({ticker})**:\n"
+                                f"  - 評級: {rating}\n"
+                                f"  - 交易單價: {price_symbol}{rec_price:.2f}\n"
+                                f"  - 買入股數: {shares:.1f} 股\n"
+                                f"  - 投入金額: {price_symbol}{amount:.2f}\n"
+                                f"  - 當前持倉權重: {weight_pct:.1f}%"
+                            )
+                        else:
+                            # Recommended but blocked / 0 shares bought
+                            block_reason = "【配置限制】可用資金不足或未獲配發預算。"
+                            try:
+                                currency = "USD" if (".TW" not in ticker and ".TWO" not in ticker) else "TWD"
+                                from core.risk.earnings_blocker import is_earnings_block_active
+                                from core.agents.budget_agent import BudgetAgent
+                                
+                                is_blocked, next_earnings_date, biz_days = is_earnings_block_active(ticker, report_date)
+                                if is_blocked:
+                                    block_reason = f"【風控管制】即將於 {next_earnings_date} 公布財報（距離 {report_date} 僅 {biz_days} 個交易日），啟動財報前交易禁令，凍結買入預算。"
+                                elif db.get_risk_circuit_breaker(currency):
+                                    block_reason = f"【風控熔斷】偵測到 {currency} 帳戶已啟動風控熔斷，全面凍結買入預算配發。"
+                                else:
+                                    budget_agent = BudgetAgent()
+                                    state = budget_agent.get_capital_state(currency)
+                                    available = state["available_capital"]
+                                    min_threshold = 100.0 if currency == "USD" else 3000.0
+                                    if available < min_threshold:
+                                        block_reason = f"【資金限制】{currency} 帳戶可用資金僅 {price_symbol}{available:.2f}（低於系統安全建倉門檻 {price_symbol}{min_threshold:.2f}），暫停配發預算。"
+                                    elif available < rec_price:
+                                        block_reason = f"【資金限制】{currency} 帳戶可用資金僅 {price_symbol}{available:.2f}（低於個股單價 {price_symbol}{rec_price:.2f}），不足購買 1 股。"
+                            except Exception as block_ex:
+                                print(f"[!] Warning: Failed to determine block reason for {ticker}: {block_ex}")
+                                
+                            blocked_buys_summary.append(
+                                f"- **推薦但未交易 {name} ({ticker})**:\n"
+                                f"  - 評級: {rating}\n"
+                                f"  - 交易單價: {price_symbol}{rec_price:.2f}\n"
+                                f"  - 執行股數: 0.0 股\n"
+                                f"  - 投入金額: {price_symbol}0.00\n"
+                                f"  - 未執行原因: {block_reason}"
+                            )
                 
                 # Check if it was sold (closed on report_date)
                 if rec["close_date"] == report_date:
@@ -1422,9 +1471,11 @@ def run_weekly_report_phase(regions_list: list, report_date: str, timestamp_suff
             print(f"[!] Warning: Failed to query recommendations for report: {query_ex}")
 
         portfolio_ledger_context = "【本週實戰帳戶交易與持倉調整明細】\n"
-        if buys_summary or sells_summary:
+        if buys_summary or blocked_buys_summary or sells_summary:
             if buys_summary:
                 portfolio_ledger_context += "本週買入交易紀錄：\n" + "\n".join(buys_summary) + "\n"
+            if blocked_buys_summary:
+                portfolio_ledger_context += "\n本週推薦但因風控/資金限制未執行交易紀錄：\n" + "\n".join(blocked_buys_summary) + "\n"
             if sells_summary:
                 portfolio_ledger_context += "\n本週賣出平倉紀錄：\n" + "\n".join(sells_summary) + "\n"
         else:
@@ -1460,7 +1511,8 @@ def run_weekly_report_phase(regions_list: list, report_date: str, timestamp_suff
                 ticker=None,
                 input_prompt=writer_agent.last_prompt,
                 output_response=final_markdown,
-                prompt_version=writer_agent.prompt_version
+                prompt_version=writer_agent.prompt_version,
+                report_date=report_date
             )
         except Exception as log_ex:
             print(f"[!] Warning: 記錄 WriterAgent 推論日誌失敗: {log_ex}")

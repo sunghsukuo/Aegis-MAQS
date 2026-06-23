@@ -22,7 +22,7 @@ class MacroAgent(BaseAgent):
             system_instruction=SYSTEM_INSTRUCTION
         )
 
-    def analyze(self, region_name: str, benchmark_data: dict, news_data: list) -> str:
+    def analyze(self, region_name: str, benchmark_data: dict, news_data: list, price_info: dict = None) -> str:
         """Executes the macro analysis for a given region."""
         # Format the input prompt with tools data
         formatted_news = ""
@@ -31,6 +31,15 @@ class MacroAgent(BaseAgent):
             if art.get('summary') and art['summary'].strip():
                 formatted_news += f"   摘要: {art['summary']}\n"
             formatted_news += "\n"
+            
+        formatted_price_regime = ""
+        if price_info:
+            formatted_price_regime = (
+                f"\n【大盤定量價格氣候數據 (Price Regime Indicators)】:\n"
+                f"* 當前量化價格氣候分類: {price_info.get('regime')}\n"
+                f"* ADX-14 (趨勢強度強度): {price_info.get('adx', 0.0):.2f} (歷史百分位數: {price_info.get('adx_percentile', 0.0)*100:.1f}%)\n"
+                f"* Hurst Exponent (赫斯特指數/趨勢持久度): {price_info.get('hurst', 0.0):.2f} (歷史百分位數: {price_info.get('hurst_percentile', 0.0)*100:.1f}%)\n"
+            )
             
         prompt = f"""
 請針對【{region_name}】進行總體經濟環境深度分析。
@@ -41,6 +50,7 @@ class MacroAgent(BaseAgent):
 * 當前價格/指數點數: {benchmark_data.get('current_price'):,.2f}
 * 週報酬率: {benchmark_data.get('weekly_return', 0)*100:.2f}%
 * 月報酬率: {benchmark_data.get('monthly_return', 0)*100:.2f}%
+{formatted_price_regime}
 
 【當週最新相關總經新聞摘要】：
 {formatted_news if formatted_news else "（暫無相關最新總經新聞）"}

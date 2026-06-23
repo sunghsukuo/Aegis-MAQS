@@ -793,22 +793,29 @@ def get_active_prompt(agent_name: str) -> dict:
                 return {"system_prompt": row[0], "version": row[1]}
         return None
 
-def save_agent_inference_log(rec_id: int, agent_name: str, ticker: str, input_prompt: str, output_response: str, prompt_version: str):
-    """Saves a detailed LLM inference log into the database."""
+def save_agent_inference_log(rec_id: int, agent_name: str, ticker: str, input_prompt: str, output_response: str, prompt_version: str, report_date: str = None):
+    """Saves a detailed LLM inference log into the database with aligned created_at timestamp."""
+    from datetime import datetime
+    time_suffix = datetime.now().strftime("%H:%M:%S")
+    if report_date:
+        created_at = f"{report_date} {time_suffix}"
+    else:
+        created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
     with db_session() as conn:
         cursor = conn.cursor()
         execute_sql(cursor,
             # SQLite
             """
-            INSERT INTO agent_inference_logs (rec_id, agent_name, ticker, input_prompt, output_response, prompt_version)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO agent_inference_logs (rec_id, agent_name, ticker, input_prompt, output_response, prompt_version, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             # MySQL
             """
-            INSERT INTO agent_inference_logs (rec_id, agent_name, ticker, input_prompt, output_response, prompt_version)
-            VALUES (%s, %s, %s, %s, %s, %s)
+            INSERT INTO agent_inference_logs (rec_id, agent_name, ticker, input_prompt, output_response, prompt_version, created_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             """,
-            (rec_id, agent_name, ticker, input_prompt, output_response, prompt_version)
+            (rec_id, agent_name, ticker, input_prompt, output_response, prompt_version, created_at)
         )
 
 def save_prompt_registry(agent_name: str, system_prompt: str, version: str, is_active: int = 1):
@@ -1038,5 +1045,14 @@ def rollback_reports_and_recommendations(report_date: str) -> None:
             (f"{report_date}%",)
         )
         print(f"[*] [DB Consistency] Purged reports matching {report_date}% from DB.")
+
+        # 8. Delete orphan agent inference logs created on this report date (rec_id is NULL)
+        execute_sql(
+            cursor,
+            "DELETE FROM agent_inference_logs WHERE rec_id IS NULL AND created_at LIKE ?",
+            "DELETE FROM agent_inference_logs WHERE rec_id IS NULL AND created_at LIKE %s",
+            (f"{report_date}%",)
+        )
+        print(f"[*] [DB Consistency] Purged orphan agent inference logs matching {report_date}% from DB.")
 
 
