@@ -185,5 +185,51 @@ def get_dynamic_mdd_limit(macro_regime: str = None, currency: str = 'TWD') -> fl
     return max(0.005, min(limit, 0.20))
 
 
+def check_risk_circuit_breaker(currency: str, region_name: str, total_nav: float, metrics: dict) -> dict:
+    """
+    Centralized risk circuit breaker check.
+    Given account currency, region name, current total NAV, and calculated metrics dict (containing 'mdd'),
+    it calculates the current drop from peak NAV, fetches the dynamic MDD limit,
+    evaluates whether the risk circuit breaker is triggered (based strictly on current drawdown),
+    and returns the evaluated states.
+    
+    Returns:
+        dict: {
+            "triggered": bool,
+            "current_drop": float,
+            "mdd_limit": float,
+            "current_mdd": float,
+            "peak_nav": float
+        }
+    """
+    import core.db_manager as db
+    from core.regime.registry import get_macro_regime
+
+    # 1. Fetch historical NAVs to evaluate current asset drop from peak
+    nav_history = db.get_portfolio_nav_history(currency)
+    nav_values = [r["total_nav"] for r in nav_history]
+    peak_nav = max(nav_values + [total_nav]) if nav_values else total_nav
+    
+    current_drop = (peak_nav - total_nav) / peak_nav if peak_nav > 0.0 else 0.0
+    current_mdd = metrics.get("mdd", 0.0)
+    
+    # 2. Fetch dynamic limit based on the current macro regime
+    regime_info = get_macro_regime(region_name)
+    regime_name_str = regime_info.get("regime", "VOLATILE_RANGEBOUND") if isinstance(regime_info, dict) else regime_info
+    mdd_limit = get_dynamic_mdd_limit(regime_name_str, currency)
+    
+    # 3. Evaluate trigger state: only based on current drawdown (drop from peak)
+    triggered = current_drop > mdd_limit
+    
+    return {
+        "triggered": triggered,
+        "current_drop": current_drop,
+        "mdd_limit": mdd_limit,
+        "current_mdd": current_mdd,
+        "peak_nav": peak_nav
+    }
+
+
+
 
 

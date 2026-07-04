@@ -74,6 +74,69 @@ def get_benchmark_performance(region_code: str) -> dict:
         print(f"Error fetching benchmark performance for {region_code}: {e}")
         return {"current_price": 0, "weekly_return": 0, "monthly_return": 0}
 
+def get_macro_indicators(region_code: str) -> dict:
+    """
+    Fetches comprehensive market indices and global macroeconomic indicators
+    using yfinance to enrich the MacroAgent's context.
+    """
+    results = {}
+    
+    # 1. Fetch Core Benchmark for the region
+    try:
+        results["benchmark"] = _get_benchmark_performance_raw(region_code)
+    except Exception as e:
+        print(f"[!] Failed to fetch benchmark for {region_code}: {e}")
+        results["benchmark"] = {"current_price": 0.0, "weekly_return": 0.0, "monthly_return": 0.0}
+        
+    # 2. Fetch Sector & Related Global Indices
+    # US Tech (Nasdaq), Philadelphia Semiconductor (SOX)
+    sector_tickers = {
+        "Nasdaq": "^IXIC",
+        "SOX": "^SOX"
+    }
+    results["sectors"] = {}
+    for name, ticker in sector_tickers.items():
+        try:
+            t = yf.Ticker(ticker)
+            hist = t.history(period="1mo").dropna(subset=["Close"])
+            if not hist.empty and len(hist) >= 6:
+                curr = hist["Close"].iloc[-1]
+                prev_w = hist["Close"].iloc[-6]
+                w_ret = (curr - prev_w) / prev_w
+                results["sectors"][name] = {
+                    "ticker": ticker,
+                    "current_price": float(curr),
+                    "weekly_return": float(w_ret)
+                }
+        except Exception as ex:
+            print(f"[!] Failed to fetch sector index {name} ({ticker}): {ex}")
+            
+    # 3. Fetch Global Macro & Risk Indicators (VIX, DXY, 10Y Yield)
+    macro_tickers = {
+        "VIX": "^VIX",
+        "DXY": "DX-Y.NYB",
+        "US10Y": "^TNX" # 10-Year Treasury Yield
+    }
+    results["macro"] = {}
+    for name, ticker in macro_tickers.items():
+        try:
+            t = yf.Ticker(ticker)
+            hist = t.history(period="1mo").dropna(subset=["Close"])
+            if not hist.empty:
+                curr = hist["Close"].iloc[-1]
+                val = float(curr)
+                prev_w = hist["Close"].iloc[-6] if len(hist) >= 6 else hist["Close"].iloc[0]
+                change = val - float(prev_w)
+                results["macro"][name] = {
+                    "ticker": ticker,
+                    "value": val,
+                    "weekly_change": change
+                }
+        except Exception as ex:
+            print(f"[!] Failed to fetch macro indicator {name} ({ticker}): {ex}")
+            
+    return results
+
 @retry_on_exception(tries=3, delay=2, backoff=2)
 def _get_single_etf_performance(etf_ticker: str, label_name: str) -> dict:
     """Fetches single ETF weekly performance with robust retries."""

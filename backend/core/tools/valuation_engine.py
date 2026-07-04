@@ -11,6 +11,30 @@ from core.tools.utils import get_cached_data, retry_on_exception
 from core.config import CACHE_DIR, GEMINI_API_KEY, DEEPSEEK_API_KEY
 from core.agents.base_agent import BaseAgent
 
+# Import JSON for blacklist manipulation
+import json
+
+BLACKLIST_FILE = CACHE_DIR / "blacklist_tickers.json"
+
+def load_blacklist() -> set:
+    """載入本地已知的已下市或無效 Ticker"""
+    if BLACKLIST_FILE.exists():
+        try:
+            with open(BLACKLIST_FILE, "r", encoding="utf-8") as f:
+                return set(json.load(f))
+        except Exception:
+            return set()
+    return set()
+
+def save_blacklist(blacklist: set) -> None:
+    """保存黑名單"""
+    BLACKLIST_FILE.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with open(BLACKLIST_FILE, "w", encoding="utf-8") as f:
+            json.dump(list(blacklist), f, ensure_ascii=False, indent=4)
+    except Exception:
+        pass
+
 def get_df_row(df, keys):
     """Safely extracts a row from a pandas DataFrame by checking multiple potential index keys."""
     if df is None or df.empty:
@@ -294,16 +318,20 @@ class ValuationEngine:
 【篩選與回傳規範】
 1. **必須為「正常上市交易中」的股票**：絕對不要推薦已下市、已合併、或更名的歷史股票代號！
    - 例如：台灣日月光請推薦 `3711.TW` (日月光投控)，絕對不能推薦已下市的 `2311.TW`。
-2. **商業模式與價值鏈對齊 (最重要)**：
+   - ⚠️ **負面禁用名單（已退市/收購，絕對不可輸出）**：`SGEN` (Seagen)、`6230.TWO` (超眾)、`DRRX` (Durect)、`MRO` (Marathon Oil)。
+2. **同市場優先原則（Market Co-locality Priority）**：
+   - 優先尋找與目標公司**相同上市區域**的競爭對手（例如：台灣公司優先與台灣同業對標；美國公司優先與美國同業對標）。
+   - **避免估值偏誤**：不同市場（如美股與台股）存在系統性的本益比溢價/折價。僅在本地市場確實缺乏可比公司時，才允許引入全球龍頭（例如：台積電可對標美股 Intel、韓股 Samsung），但跨國對標個股數量建議不超過 2 檔。
+3. **商業模式與價值鏈對齊 (最重要)**：
    - 同業必須與目標公司具有**相同或極度相似的商業模式與產業定位**（如：代工廠 vs 代工廠；IC設計 vs IC設計；晶圓代工 vs 晶圓代工；品牌廠 vs 品牌廠）。
    - **絕對不要混淆產業鏈上下游或客戶**。例如：
      - 若目標公司是代工廠（如鴻海 2317.TW），同業**必須**是其他電子代工/組裝廠（如廣達、和碩、緯創），**絕對不可**將其重要客戶（如 Apple）或上游晶片商（如 Qualcomm）列為同業，因為其利潤率、商業模式與估值倍數完全不同。
      - 若目標公司是晶圓代工廠（如台積電 2330.TW），同業應為聯電、Intel、Samsung，**絕對不可**將其客戶（如 Nvidia, Apple）或設備供應商（如 ASML）列為同業。
-3. **正確同業範例參考 (Few-Shot)**：
+4. **正確同業範例參考 (Few-Shot)**：
    - 鴻海 (2317.TW) 的正確同業應為：廣達 (2382.TW)、和碩 (4938.TW)、緯創 (3231.TW)、英業達 (2356.TW)。
    - 台積電 (2330.TW) 的正確同業應為：聯電 (2303.TW)、Intel (INTC)、Samsung (005930.KS)。
-4. **優先參考本地候選名單**：你可以參考「本地資料庫參考同業候選名單」，但如果該名單內的公司不符合上述「商業模式對齊」原則（例如本地分類過於廣泛），請**果斷排除並尋找更精準的全球/區域同業**。
-5. **回傳格式**：請只回傳一個標準 JSON 陣列，不包含 ```json 或 ``` 等 Markdown 標記，格式如下：
+5. **優先參考本地候選名單**：你可以參考「本地資料庫參考同業候選名單」，但如果該名單內的公司不符合上述「商業模式對齊」原則（例如本地分類過於廣泛），請**果斷排除並尋找更精準的全球/區域同業**。
+6. **回傳格式**：請只回傳一個標準 JSON 陣列，不包含 ```json 或 ``` 等 Markdown 標記，格式如下：
 [
   {{"ticker": "同業代號", "name": "同業名稱"}}
 ]
@@ -311,9 +339,10 @@ class ValuationEngine:
 同業代號格式說明 (必須與 Yahoo Finance Ticker 一致)：
 - 美股：直接使用 Ticker (例如 INTC, NVDA, AMD, QCOM)
 - 台股：上市代號加上 .TW (例如 2303.TW)，上櫃代號加上 .TWO (例如 5274.TWO)
-- 韓股：代號加上 .KS (例如 005930.KS)
+- 韓股：代號加上 .KS (調整為相同)
 - 其他市場比照 Yahoo Finance 標準代碼格式。
 - ⚠️特別警告：在 "ticker" 欄位中必須填寫標準的 Yahoo Finance 股票代號（Ticker），絕對不可填寫公司完整名稱（例如：不准填寫 'Samsung Electronics Co., Ltd.', 'SK Hynix Inc.', 'Western Digital Corporation'，而必須填寫 '005930.KS', '000660.KS', 'WDC'）。
+7. **自我反思確認 (Self-Reflection)**：在回傳答案之前，你必須在思考鏈中進行二次確認：檢查你選出的 4 檔同業是否在 2024-2026 年依然正常上市交易。如發現任何已被收購（如 SGEN）或已被私有化下市（如超眾/6230.TWO）的公司，請立刻用其他存活的同業替代。
 """
                 response_text = agent.run(prompt)
                 if response_text:
@@ -332,9 +361,13 @@ class ValuationEngine:
                     llm_peers = json.loads(clean_text)
                     if isinstance(llm_peers, list):
                         valid_llm_peers = []
+                        blacklist = load_blacklist()
                         for p in llm_peers:
                             if isinstance(p, dict) and "ticker" in p and "name" in p:
                                 p_ticker = p["ticker"].strip().upper()
+                                # 1. 0-Token 物理攔截：已在下市/失效黑名單中，直接過濾
+                                if p_ticker in blacklist:
+                                    continue
                                 # Validation defense: Must not be empty, must be <= 12 chars, no spaces, only allowed characters
                                 if p_ticker and p_ticker != ticker.upper() and " " not in p_ticker and len(p_ticker) <= 12:
                                     if re.match(r"^[A-Z0-9.\-^:]+$", p_ticker):
@@ -369,10 +402,16 @@ class ValuationEngine:
                 ]
             peers = [p for p in peers if p["ticker"].upper() != ticker.upper()]
 
-        # 3. Fetch peer metrics from Cache or API
+        # 3. Fetch peer metrics from Cache or API (with automatic blacklisting check and updates)
         peer_valuations = []
+        blacklist = load_blacklist()
+        blacklist_updated = False
+        
         for p in peers:
             p_ticker = p["ticker"]
+            if p_ticker.upper() in blacklist:
+                continue
+                
             cache_key = f"financials_{p_ticker.upper()}"
             p_data = get_cached_data(CACHE_DIR, cache_key, ttl_hours=12)
             if not p_data:
@@ -391,6 +430,11 @@ class ValuationEngine:
                         "pe": pe,
                         "pb": pb
                     })
+            else:
+                # 財務數據獲取為空或失敗，判定為無效或已下市代號，自動寫入本地黑名單快取
+                print(f"[!] [同業物理過濾] 檢測到 {p_ticker} 財務資料獲取失敗，判定為失效標的，寫入黑名單。")
+                blacklist.add(p_ticker.upper())
+                blacklist_updated = True
 
         # 4. Fallback check: If LLM peers fetched less than 2 valid valuation metrics, fallback to local DB peers
         if len(peer_valuations) < 2 and peers != db_peers and db_peers:
@@ -399,6 +443,8 @@ class ValuationEngine:
             peer_valuations = []
             for p in peers:
                 p_ticker = p["ticker"]
+                if p_ticker.upper() in blacklist:
+                    continue
                 cache_key = f"financials_{p_ticker.upper()}"
                 p_data = get_cached_data(CACHE_DIR, cache_key, ttl_hours=12)
                 if not p_data:
@@ -417,6 +463,13 @@ class ValuationEngine:
                             "pe": pe,
                             "pb": pb
                         })
+                else:
+                    print(f"[!] [同業物理過濾] Fallback 檢測到 {p_ticker} 財務資料獲取失敗，寫入黑名單。")
+                    blacklist.add(p_ticker.upper())
+                    blacklist_updated = True
+                    
+        if blacklist_updated:
+            save_blacklist(blacklist)
                     
 
 

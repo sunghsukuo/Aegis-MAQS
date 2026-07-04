@@ -34,7 +34,7 @@ def backtest_db_session():
 
 def init_backtest_database(initial_usd: float = 100000.0, initial_twd: float = 3000000.0):
     """
-    Initializes ALL 11 tables for backtesting and seeds static configs from the production database.
+    Initializes ALL 13 tables for backtesting and seeds static configs from the production database.
     This ensures complete database isolation and eliminates database table errors.
     """
     with backtest_db_session() as conn:
@@ -74,9 +74,17 @@ def init_backtest_database(initial_usd: float = 100000.0, initial_twd: float = 3
                 pnl REAL DEFAULT 0.0,
                 macro_regime TEXT DEFAULT NULL,
                 price_regime TEXT DEFAULT NULL,
+                source_track TEXT DEFAULT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        
+        # Check and alter recommendations table if source_track is missing in existing table
+        cursor.execute("PRAGMA table_info(recommendations)")
+        cols = [row[1] for row in cursor.fetchall()]
+        if "source_track" not in cols:
+            cursor.execute("ALTER TABLE recommendations ADD COLUMN source_track TEXT DEFAULT NULL;")
+            print("[✓] SQLite backtest recommendations table upgraded with source_track column.")
         
         # 3. Capital Ledger Table DDL
         cursor.execute("""
@@ -195,6 +203,56 @@ def init_backtest_database(initial_usd: float = 100000.0, initial_twd: float = 3
             )
         """)
         
+        # 12. Thematic Registry & Constituents Tables DDL
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS thematic_registry (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                theme_name TEXT NOT NULL UNIQUE,
+                description TEXT,
+                expected_horizon_months INTEGER DEFAULT 12,
+                news_heat_score REAL DEFAULT 0.0,
+                is_active INTEGER DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS thematic_constituents (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                theme_id INTEGER NOT NULL,
+                ticker TEXT NOT NULL,
+                purity_score REAL DEFAULT 1.0,
+                supply_chain_role TEXT,
+                registered_reason TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (theme_id, ticker),
+                FOREIGN KEY (theme_id) REFERENCES thematic_registry(id) ON DELETE CASCADE
+            );
+        """)
+        
+        # 13. Macro Liquidity History Table DDL
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS macro_liquidity_history (
+                record_date TEXT PRIMARY KEY,
+                fed_assets REAL NOT NULL,
+                tga_balance REAL NOT NULL,
+                reverse_repos REAL NOT NULL,
+                net_liquidity REAL NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+        
+        # 14. Taiwan Chip/Capital Flow History Table DDL
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS taiwan_chip_history (
+                record_date TEXT PRIMARY KEY,
+                foreign_futures_net_oi INTEGER NOT NULL,
+                foreign_net_buy REAL NOT NULL,
+                dealers_net_buy REAL NOT NULL,
+                investment_trust_net_buy REAL NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+        
         conn.commit()
         
         # Seed initial mock capital and reset transient databases
@@ -225,12 +283,12 @@ def init_backtest_database(initial_usd: float = 100000.0, initial_twd: float = 3
             
         # Seed Static Configurations from the Production Database
         seed_static_configurations(conn)
-        print(f"[🛡️ 回測沙盒] 隔離資料庫(11張表)重設與 Seeding 完成！已注資虛擬本金：USD ${initial_usd:,.2f} | TWD ${initial_twd:,.2f}")
+        print(f"[🛡️ 回測沙盒] 隔離資料庫(15張表)重設與 Seeding 完成！已注資虛擬本金：USD ${initial_usd:,.2f} | TWD ${initial_twd:,.2f}")
 
 def seed_static_configurations(backtest_conn):
     """
     Seeds static configuration data from the production database to the backtest database.
-    Static tables include: taiwan_stock_names, sector_registry, sector_constituents, and prompt_registry.
+    Static tables include: taiwan_stock_names, sector_registry, sector_constituents, prompt_registry, thematic_registry, and thematic_constituents.
     """
     import core.db_manager as prod_db
     backtest_cursor = backtest_conn.cursor()
@@ -240,6 +298,8 @@ def seed_static_configurations(backtest_conn):
     backtest_cursor.execute("DELETE FROM sector_constituents")
     backtest_cursor.execute("DELETE FROM sector_registry")
     backtest_cursor.execute("DELETE FROM prompt_registry")
+    backtest_cursor.execute("DELETE FROM thematic_constituents")
+    backtest_cursor.execute("DELETE FROM thematic_registry")
     backtest_conn.commit()
     
     # Temporarily restore DB_TYPE to production configuration to load configurations from the correct database (e.g. MySQL)
@@ -295,8 +355,32 @@ def seed_static_configurations(backtest_conn):
                     (row_dict["id"], row_dict["agent_name"], row_dict["system_prompt"], row_dict["version"], row_dict.get("performance_score", 0.0))
                 )
                 
+            # E. Seed thematic_registry
+            prod_db.execute_sql(prod_cursor, "SELECT * FROM thematic_registry", "SELECT * FROM thematic_registry")
+            rows = prod_cursor.fetchall()
+            for r in rows:
+                row_dict = dict(r)
+                backtest_cursor.execute(
+                    """INSERT INTO thematic_registry (id, theme_name, description, expected_horizon_months, news_heat_score, is_active)
+                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    (row_dict["id"], row_dict["theme_name"], row_dict.get("description", ""),
+                     row_dict.get("expected_horizon_months", 12), row_dict.get("news_heat_score", 0.0), row_dict.get("is_active", 1))
+                )
+                
+            # F. Seed thematic_constituents
+            prod_db.execute_sql(prod_cursor, "SELECT * FROM thematic_constituents", "SELECT * FROM thematic_constituents")
+            rows = prod_cursor.fetchall()
+            for r in rows:
+                row_dict = dict(r)
+                backtest_cursor.execute(
+                    """INSERT INTO thematic_constituents (id, theme_id, ticker, purity_score, supply_chain_role, registered_reason)
+                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    (row_dict["id"], row_dict["theme_id"], row_dict["ticker"],
+                     row_dict.get("purity_score", 1.0), row_dict.get("supply_chain_role", ""), row_dict.get("registered_reason", ""))
+                )
+                
             backtest_conn.commit()
-            print("[🛡️ 回測沙盒] 已成功同步實戰資料庫配置 (板塊/台股名稱/Prompt) 至回測資料庫。")
+            print("[🛡️ 回測沙盒] 已成功同步實戰資料庫配置 (板塊/台股名稱/Prompt/主題概念) 至回測資料庫。")
             
     except Exception as e:
         import traceback

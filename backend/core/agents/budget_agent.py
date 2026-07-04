@@ -68,6 +68,7 @@ class BudgetAgent:
         currency = self.get_currency_by_region(region)
         state = self.get_capital_state(currency)
         available = state["available_capital"]
+        original_available = available
         
         # Check if the risk circuit breaker is active for this currency (Circuit Breaker block)
         from core.db_manager import get_risk_circuit_breaker
@@ -98,7 +99,37 @@ class BudgetAgent:
         if available < min_threshold:
             print(f"[!] 預算代理人提示：{currency} 可用資金過低 ({available:.2f})，無法為 {ticker} 分配新預算。")
             return 0.0, 0.0
+
+        # --- 🕵️‍♂️ 流動性偵察與防禦機制 (Liquidity Scout Integration) ---
+        is_backtest_mode = False
+        query_date = report_date or datetime.now().strftime("%Y-%m-%d")
+        try:
+            from backtest.replayer import get_simulated_date
+            sim_date = get_simulated_date()
+            if sim_date:
+                is_backtest_mode = True
+                query_date = sim_date
+        except Exception:
+            pass
             
+        cls_score = 0.5
+        try:
+            from core.tools.liquidity_loader import get_liquidity_state
+            liq_state = get_liquidity_state(query_date, is_backtest=is_backtest_mode)
+            cls_score = liq_state.get("composite_score", 0.5)
+        except Exception as liq_ex:
+            print(f"[!] 預算代理人警告：無法獲取流動性狀態，預設中性。錯誤: {liq_ex}")
+            
+        # 套用流動性緊縮防禦 (CLS >= 0.70 視為緊縮)
+        is_liquidity_stressed = cls_score >= 0.70
+        if is_liquidity_stressed:
+            # 1. 鎖定 15% 資金作為流動性安全緩衝金 (Liquidity Buffer)
+            total_pocket = available + state.get("reserved_cash", 0.0)
+            liq_buffer = total_pocket * 0.15
+            available = max(0.0, available - liq_buffer)
+            print(f"[🛡️ 流動性防禦] 偵測到市場流動性緊縮 (CLS: {cls_score:.2f})！")
+            print(f"            暫時鎖定 {liq_buffer:.2f} {currency} 安全緩衝金。可用計算資金調降至 {available:.2f}。")
+
         # 決定分配權重 (優先採用 AI 建議權重)
         ratio = custom_weight if custom_weight is not None and custom_weight > 0.0 else self.allocation_ratio
         
@@ -199,6 +230,11 @@ class BudgetAgent:
             
         ratio = min(ratio, max_ratio)
         
+        # 如果處於流動性緊縮狀態，強制將單檔持倉權重上限砍半，最高不超過 12%
+        if is_liquidity_stressed:
+            ratio = min(ratio, 0.12)
+            print(f"            [🛡️ 流動性防禦] 已強制將 {ticker} 的最大配置權重下修至 12% 以分散風險。")
+        
         # 計算分配金額 (可用資金 * 權重)
         target_budget = available * ratio
         
@@ -219,7 +255,7 @@ class BudgetAgent:
         invested_amount = shares * recommend_price
         
         # 扣減 capital_ledger 中的可用資金
-        new_available = available - invested_amount
+        new_available = original_available - invested_amount
         
         with db_session() as conn:
             cursor = conn.cursor()

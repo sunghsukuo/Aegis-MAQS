@@ -298,24 +298,17 @@ def run_portfolio_check(report_date: str, regions: list = None):
 
             # E. Risk Watchdog & Circuit Breaker (3.0% Dynamic Monitor)
             try:
-                # Fetch historical NAVs to evaluate current asset drop
-                nav_history = db.get_portfolio_nav_history(curr)
-                nav_values = [r["total_nav"] for r in nav_history]
-                peak_nav = max(nav_values + [total_nav]) if nav_values else total_nav
-                current_drop = (peak_nav - total_nav) / peak_nav if peak_nav > 0.0 else 0.0
-                current_mdd = metrics.get("mdd", 0.0)
+                # Call centralized risk circuit breaker check
+                from core.risk.risk_manager import check_risk_circuit_breaker
                 
-                # Fetch dynamic limit based on regime
-                from core.regime.registry import get_macro_regime
-                from core.risk.risk_manager import get_dynamic_mdd_limit
-                
-                regime_info = get_macro_regime(region_filter)
-                regime_name = regime_info.get("regime", "VOLATILE_RANGEBOUND")
-                mdd_limit = get_dynamic_mdd_limit(regime_name, curr)
-
+                res = check_risk_circuit_breaker(curr, region_filter, total_nav, metrics)
+                triggered = res["triggered"]
+                current_drop = res["current_drop"]
+                mdd_limit = res["mdd_limit"]
+                current_mdd = res["current_mdd"]
+                peak_nav = res["peak_nav"]
                 
                 previously_triggered = db.get_risk_circuit_breaker(curr)
-                triggered = current_drop > mdd_limit
                 
                 # Sync circuit breaker state in database
                 db.update_risk_circuit_breaker(curr, 1 if triggered else 0)

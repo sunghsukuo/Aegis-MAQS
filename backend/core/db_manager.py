@@ -134,6 +134,7 @@ def init_db():
                     pnl DOUBLE DEFAULT 0.0,                -- Realized/Unrealized P&L in currency
                     macro_regime VARCHAR(50) DEFAULT NULL, -- Market macro environment tag
                     price_regime VARCHAR(50) DEFAULT NULL, -- Market price behavior tag
+                    source_track VARCHAR(50) DEFAULT NULL, -- Track origin label
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     INDEX idx_report_date (report_date),
                     INDEX idx_ticker (ticker)
@@ -161,6 +162,7 @@ def init_db():
                     pnl REAL DEFAULT 0.0,
                     macro_regime TEXT DEFAULT NULL,
                     price_regime TEXT DEFAULT NULL,
+                    source_track TEXT DEFAULT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
@@ -239,6 +241,11 @@ def init_db():
                 cursor.execute("ALTER TABLE recommendations ADD COLUMN price_regime VARCHAR(50) DEFAULT NULL;")
                 print("[✓] MySQL recommendations table upgraded with regime logging columns.")
                 
+            cursor.execute("SHOW COLUMNS FROM recommendations LIKE 'source_track'")
+            if not cursor.fetchone():
+                cursor.execute("ALTER TABLE recommendations ADD COLUMN source_track VARCHAR(50) DEFAULT NULL;")
+                print("[✓] MySQL recommendations table upgraded with source_track column.")
+                
             cursor.execute("SHOW COLUMNS FROM capital_ledger LIKE 'risk_circuit_breaker'")
             if not cursor.fetchone():
                 cursor.execute("ALTER TABLE capital_ledger ADD COLUMN risk_circuit_breaker TINYINT DEFAULT 0;")
@@ -256,6 +263,10 @@ def init_db():
                 cursor.execute("ALTER TABLE recommendations ADD COLUMN macro_regime TEXT DEFAULT NULL;")
                 cursor.execute("ALTER TABLE recommendations ADD COLUMN price_regime TEXT DEFAULT NULL;")
                 print("[✓] SQLite recommendations table upgraded with regime logging columns.")
+                
+            if "source_track" not in cols:
+                cursor.execute("ALTER TABLE recommendations ADD COLUMN source_track TEXT DEFAULT NULL;")
+                print("[✓] SQLite recommendations table upgraded with source_track column.")
             
             cursor.execute("PRAGMA table_info(capital_ledger)")
             ledger_cols = [row[1] for row in cursor.fetchall()]
@@ -436,6 +447,106 @@ def init_db():
                 );
             """)
 
+        # 10. Thematic Registry & Constituents Tables DDL
+        if DB_TYPE == "mysql":
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS thematic_registry (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    theme_name VARCHAR(100) NOT NULL UNIQUE,       -- e.g., 'AI Infrastructure', 'GLP-1 Obesity'
+                    description TEXT,                              -- Theme description
+                    expected_horizon_months INT DEFAULT 12,        -- Expected horizon
+                    news_heat_score FLOAT DEFAULT 0.0,             -- Heat score
+                    is_active TINYINT DEFAULT 1,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS thematic_constituents (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    theme_id INT NOT NULL,
+                    ticker VARCHAR(20) NOT NULL,
+                    purity_score FLOAT DEFAULT 1.0,               -- Theme relevance
+                    supply_chain_role VARCHAR(100),                -- Supply chain role
+                    registered_reason TEXT,                        -- Selection reason
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE KEY uq_theme_ticker (theme_id, ticker),
+                    FOREIGN KEY (theme_id) REFERENCES thematic_registry(id) ON DELETE CASCADE
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+            """)
+        else:
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS thematic_registry (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    theme_name TEXT NOT NULL UNIQUE,
+                    description TEXT,
+                    expected_horizon_months INTEGER DEFAULT 12,
+                    news_heat_score REAL DEFAULT 0.0,
+                    is_active INTEGER DEFAULT 1,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS thematic_constituents (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    theme_id INTEGER NOT NULL,
+                    ticker TEXT NOT NULL,
+                    purity_score REAL DEFAULT 1.0,
+                    supply_chain_role TEXT,
+                    registered_reason TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE (theme_id, ticker),
+                    FOREIGN KEY (theme_id) REFERENCES thematic_registry(id) ON DELETE CASCADE
+                );
+            """)
+
+        # 11. Macro Liquidity History Table DDL (FRED)
+        if DB_TYPE == "mysql":
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS macro_liquidity_history (
+                    record_date VARCHAR(50) PRIMARY KEY,
+                    fed_assets DOUBLE NOT NULL,
+                    tga_balance DOUBLE NOT NULL,
+                    reverse_repos DOUBLE NOT NULL,
+                    net_liquidity DOUBLE NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+            """)
+        else:
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS macro_liquidity_history (
+                    record_date TEXT PRIMARY KEY,
+                    fed_assets REAL NOT NULL,
+                    tga_balance REAL NOT NULL,
+                    reverse_repos REAL NOT NULL,
+                    net_liquidity REAL NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+            """)
+
+        # 12. Taiwan Chip/Capital Flow History Table DDL (TWSE / TAIFEX)
+        if DB_TYPE == "mysql":
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS taiwan_chip_history (
+                    record_date VARCHAR(50) PRIMARY KEY,
+                    foreign_futures_net_oi INT NOT NULL,
+                    foreign_net_buy DOUBLE NOT NULL,
+                    dealers_net_buy DOUBLE NOT NULL,
+                    investment_trust_net_buy DOUBLE NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+            """)
+        else:
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS taiwan_chip_history (
+                    record_date TEXT PRIMARY KEY,
+                    foreign_futures_net_oi INTEGER NOT NULL,
+                    foreign_net_buy REAL NOT NULL,
+                    dealers_net_buy REAL NOT NULL,
+                    investment_trust_net_buy REAL NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+            """)
+
         # Seed capital_ledger with default starting balances if empty
         execute_sql(cursor,
             "SELECT COUNT(*) FROM capital_ledger",
@@ -609,7 +720,8 @@ def save_recommendation(report_date: str, region: str, ticker: str, company_name
                         recommend_price: float, recommend_reason: str,
                         target_price: float = None, stop_loss: float = None, rating: str = "Buy",
                         invested_amount: float = 0.0, shares: float = 0.0,
-                        macro_regime: str = None, price_regime: str = None) -> int:
+                        macro_regime: str = None, price_regime: str = None,
+                        source_track: str = None) -> int:
     """Inserts a new stock recommendation for weekly tracking, returning the inserted row ID."""
     is_act = 1 if shares > 0.0 else 0
     with db_session() as conn:
@@ -620,20 +732,20 @@ def save_recommendation(report_date: str, region: str, ticker: str, company_name
             INSERT INTO recommendations (
                 report_date, region, ticker, company_name, recommend_price,
                 recommend_reason, target_price, stop_loss, rating, is_active,
-                invested_amount, shares, pnl, macro_regime, price_regime
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0.0, ?, ?)
+                invested_amount, shares, pnl, macro_regime, price_regime, source_track
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0.0, ?, ?, ?)
             """,
             # MySQL:
             """
             INSERT INTO recommendations (
                 report_date, region, ticker, company_name, recommend_price,
                 recommend_reason, target_price, stop_loss, rating, is_active,
-                invested_amount, shares, pnl, macro_regime, price_regime
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 0.0, %s, %s)
+                invested_amount, shares, pnl, macro_regime, price_regime, source_track
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 0.0, %s, %s, %s)
             """,
             (report_date, region, ticker.upper(), company_name, recommend_price,
              recommend_reason, target_price, stop_loss, rating, is_act, invested_amount, shares,
-             macro_regime, price_regime)
+             macro_regime, price_regime, source_track)
         )
         return cursor.lastrowid
 
@@ -1054,5 +1166,162 @@ def rollback_reports_and_recommendations(report_date: str) -> None:
             (f"{report_date}%",)
         )
         print(f"[*] [DB Consistency] Purged orphan agent inference logs matching {report_date}% from DB.")
+
+
+# --- Macro Liquidity and Taiwan Chip Data Access Helpers ---
+
+def save_macro_liquidity(record_date: str, fed_assets: float, tga_balance: float, reverse_repos: float, net_liquidity: float) -> None:
+    """
+    Inserts or updates a macro liquidity record (FRED data) in the database.
+    """
+    with db_session() as conn:
+        cursor = conn.cursor()
+        if DB_TYPE == "mysql":
+            query = """
+                INSERT INTO macro_liquidity_history (record_date, fed_assets, tga_balance, reverse_repos, net_liquidity)
+                VALUES (%s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE 
+                    fed_assets = VALUES(fed_assets), 
+                    tga_balance = VALUES(tga_balance), 
+                    reverse_repos = VALUES(reverse_repos), 
+                    net_liquidity = VALUES(net_liquidity)
+            """
+            cursor.execute(query, (record_date, fed_assets, tga_balance, reverse_repos, net_liquidity))
+        else:
+            query = """
+                INSERT INTO macro_liquidity_history (record_date, fed_assets, tga_balance, reverse_repos, net_liquidity)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(record_date) DO UPDATE SET 
+                    fed_assets = excluded.fed_assets, 
+                    tga_balance = excluded.tga_balance, 
+                    reverse_repos = excluded.reverse_repos, 
+                    net_liquidity = excluded.net_liquidity
+            """
+            cursor.execute(query, (record_date, fed_assets, tga_balance, reverse_repos, net_liquidity))
+
+
+def get_macro_liquidity(sim_date: str = None) -> dict:
+    """
+    Retrieves the latest macro liquidity record.
+    If sim_date is provided (Backtesting mode), filters to return the latest record where record_date <= sim_date.
+    """
+    with db_session() as conn:
+        cursor = conn.cursor()
+        if sim_date:
+            execute_sql(cursor,
+                "SELECT record_date, fed_assets, tga_balance, reverse_repos, net_liquidity FROM macro_liquidity_history WHERE record_date <= ? ORDER BY record_date DESC LIMIT 1",
+                "SELECT record_date, fed_assets, tga_balance, reverse_repos, net_liquidity FROM macro_liquidity_history WHERE record_date <= %s ORDER BY record_date DESC LIMIT 1",
+                (sim_date,)
+            )
+        else:
+            execute_sql(cursor,
+                "SELECT record_date, fed_assets, tga_balance, reverse_repos, net_liquidity FROM macro_liquidity_history ORDER BY record_date DESC LIMIT 1",
+                "SELECT record_date, fed_assets, tga_balance, reverse_repos, net_liquidity FROM macro_liquidity_history ORDER BY record_date DESC LIMIT 1"
+            )
+        row = cursor.fetchone()
+        if not row:
+            return {}
+        if isinstance(row, dict):
+            return dict(row)
+        return {
+            "record_date": row[0],
+            "fed_assets": row[1],
+            "tga_balance": row[2],
+            "reverse_repos": row[3],
+            "net_liquidity": row[4]
+        }
+
+
+def save_taiwan_chip(record_date: str, foreign_futures_net_oi: int, foreign_net_buy: float, dealers_net_buy: float, investment_trust_net_buy: float) -> None:
+    """
+    Inserts or updates a Taiwan chip/capital flow record in the database.
+    """
+    with db_session() as conn:
+        cursor = conn.cursor()
+        if DB_TYPE == "mysql":
+            query = """
+                INSERT INTO taiwan_chip_history (record_date, foreign_futures_net_oi, foreign_net_buy, dealers_net_buy, investment_trust_net_buy)
+                VALUES (%s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE 
+                    foreign_futures_net_oi = VALUES(foreign_futures_net_oi), 
+                    foreign_net_buy = VALUES(foreign_net_buy), 
+                    dealers_net_buy = VALUES(dealers_net_buy), 
+                    investment_trust_net_buy = VALUES(investment_trust_net_buy)
+            """
+            cursor.execute(query, (record_date, foreign_futures_net_oi, foreign_net_buy, dealers_net_buy, investment_trust_net_buy))
+        else:
+            query = """
+                INSERT INTO taiwan_chip_history (record_date, foreign_futures_net_oi, foreign_net_buy, dealers_net_buy, investment_trust_net_buy)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(record_date) DO UPDATE SET 
+                    foreign_futures_net_oi = excluded.foreign_futures_net_oi, 
+                    foreign_net_buy = excluded.foreign_net_buy, 
+                    dealers_net_buy = excluded.dealers_net_buy, 
+                    investment_trust_net_buy = excluded.investment_trust_net_buy
+            """
+            cursor.execute(query, (record_date, foreign_futures_net_oi, foreign_net_buy, dealers_net_buy, investment_trust_net_buy))
+
+
+def get_taiwan_chip(sim_date: str = None) -> dict:
+    """
+    Retrieves the latest Taiwan chip/capital flow record.
+    If sim_date is provided (Backtesting mode), filters to return the latest record where record_date <= sim_date.
+    """
+    with db_session() as conn:
+        cursor = conn.cursor()
+        if sim_date:
+            execute_sql(cursor,
+                "SELECT record_date, foreign_futures_net_oi, foreign_net_buy, dealers_net_buy, investment_trust_net_buy FROM taiwan_chip_history WHERE record_date <= ? ORDER BY record_date DESC LIMIT 1",
+                "SELECT record_date, foreign_futures_net_oi, foreign_net_buy, dealers_net_buy, investment_trust_net_buy FROM taiwan_chip_history WHERE record_date <= %s ORDER BY record_date DESC LIMIT 1",
+                (sim_date,)
+            )
+        else:
+            execute_sql(cursor,
+                "SELECT record_date, foreign_futures_net_oi, foreign_net_buy, dealers_net_buy, investment_trust_net_buy FROM taiwan_chip_history ORDER BY record_date DESC LIMIT 1",
+                "SELECT record_date, foreign_futures_net_oi, foreign_net_buy, dealers_net_buy, investment_trust_net_buy FROM taiwan_chip_history ORDER BY record_date DESC LIMIT 1"
+            )
+        row = cursor.fetchone()
+        if not row:
+            return {}
+        if isinstance(row, dict):
+            return dict(row)
+        return {
+            "record_date": row[0],
+            "foreign_futures_net_oi": row[1],
+            "foreign_net_buy": row[2],
+            "dealers_net_buy": row[3],
+            "investment_trust_net_buy": row[4]
+        }
+
+def clear_taiwan_chip_history() -> None:
+    """
+    Clears all records from the 'taiwan_chip_history' table.
+    """
+    with db_session() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM taiwan_chip_history")
+
+def get_historical_futures_oi(sim_date: str, limit: int = 60) -> list:
+    """
+    Retrieves the last N historical records of foreign_futures_net_oi strictly before sim_date.
+    Used for calculating dynamic rolling thresholds.
+    """
+    with db_session() as conn:
+        cursor = conn.cursor()
+        if DB_TYPE == "mysql":
+            query = "SELECT foreign_futures_net_oi FROM taiwan_chip_history WHERE record_date < %s ORDER BY record_date DESC LIMIT %s"
+        else:
+            query = "SELECT foreign_futures_net_oi FROM taiwan_chip_history WHERE record_date < ? ORDER BY record_date DESC LIMIT ?"
+        cursor.execute(query, (sim_date, limit))
+        rows = cursor.fetchall()
+        # Handle different row formats (tuple vs dict) depending on connector
+        if not rows:
+            return []
+        if isinstance(rows[0], dict):
+            return [r["foreign_futures_net_oi"] for r in rows]
+        return [r[0] for r in rows]
+
+
+
 
 

@@ -29,13 +29,14 @@ class WriterAgent(BaseAgent):
             model_name=WRITER_MODEL
         )
 
-    def synthesize(self, date_str: str, macro_reports: list, market_reports: list,
+    def synthesize(self, date_str: str, macro_reports: list, liquidity_reports: list, market_reports: list,
                    stock_reports: list, reflection_report: str, candidate_summary: str = None,
                    portfolio_ledger: str = None) -> str:
         """Synthesizes all analyst sub-reports into a single comprehensive Weekly Investment Report."""
         
         # Structure the giant context prompt for synthesis
         macro_context = "\n\n".join(macro_reports)
+        liquidity_context = "\n\n".join(liquidity_reports) if liquidity_reports else "（無）"
         market_context = "\n\n".join(market_reports)
         stock_context = "\n\n".join(stock_reports)
         
@@ -56,26 +57,34 @@ class WriterAgent(BaseAgent):
 請遵循以下寫作紀律以求決策透明與報告呼應：
 1. 僅將評級為 Buy 或 Strong Buy 的標的列入「### 本週推薦配置總覽表」中。**請務必在推薦表內或下方的「深入投資理由說明」中，清晰標明每檔推薦個股所隸屬的產業板塊或對應的 ETF 代號（例如在個股名稱旁標註 (隸屬 XLP 板塊)），以便讀者對照選股掃描報告進行呼應查詢。**
 2. 所有評級為 Hold（持有/觀望）或 Sell / Avoid（避免買入）的標的，**必須無一遺漏地**列入「### 本週調降/避險排除標的與防禦配置說明」表格，並在下方寫出具體的不推薦原因（例如：估值高估、風險報酬比不合要求、或大盤熔斷凍結，每檔限 50-80 字），並標註其隸屬的板塊/ETF，絕不允許隨意遺漏！
-3. **本週所有實際帳戶交易成交紀錄已列於下方【5. 本週實戰帳戶交易與持倉調整明細】，請務必將其整理並填寫於最後的「### 本週實戰帳戶交易與持倉調整明細」表格中**，特別注意若有評級為 Hold 的個股被建倉/分配 5% 權重，必須在此表內明確列出，讓讀者清晰掌握帳戶資金與實際持股變化。
+3. **本週所有實際帳戶交易成交紀錄已列於下方【6. 本週實戰帳戶交易與持倉調整明細】，請務必將其整理並填寫於最後的「### 本週實戰帳戶交易與持倉調整明細」表格中**，特別注意若有評級為 Hold 的個股被建倉/分配 5% 權重，必須在此表內明確列出，讓讀者清晰掌握帳戶資金與實際持股變化。
+4. **增設「量化與 AI 定性決策博弈防線說明」專欄**：請在週報第三部分（板塊分析與個股配置區）或合適的醒目位置，專門加入一個名為 **「【量化與 AI 定性決策博弈說明】」** 的段落，向讀者以通俗流暢的繁體中文解釋系統最新的兩項核心風控邏輯，讓讀者對個股建倉決策有清晰明確的因果了解：
+   - **「降級防守，禁止封殺」**：針對起源軌道為「板塊動能 Beta (趨勢/回歸)」或「前瞻主題」選股（即資金與趨勢驅動型）的個股，大模型若評估為 Sell，系統會自動將其評級升格至 "Hold" 並配以 5% 的起步部位與緊密移動止損，以避免大模型因「定性估值恐高」而完全封殺了強趨勢板塊的交易機會。
+   - **「保留完整否決權」**：針對起源軌道為「財務加速 Alpha」選股（即純基本面與財報增長驅動型）的個股，若大模型評估為 Sell，系統會完全尊重其否決權並將預算歸零 (0.00)，以嚴格守護財務基本面安全。
+
 
 ==================================================
 【1. 各區域總體經濟分析師子報告】：
 {macro_context}
 
 ==================================================
-【2. 各區域板塊動能分析師子報告】：
+【2. 各區域資金流及流動性偵察分析師子報告】：
+{liquidity_context}
+
+==================================================
+【3. 各區域板塊動能分析師子報告】：
 {market_context}
 
 ==================================================
-<3. 嚴選標的基本面估值與消息催化劑子報告>：
+<4. 嚴選標的基本面估值與消息催化劑子報告>：
 {stock_context}
 
 ==================================================
-【4. 歷史回測與決策自我修正子報告】：
+【5. 歷史回測與決策自我修正子報告】：
 {reflection_report}
 
 ==================================================
-【5. 本週實戰帳戶交易與持倉調整明細】：
+【6. 本週實戰帳戶交易與持倉調整明細】：
 {portfolio_ledger or "（本週無新交易紀錄，維持原持倉）"}
 ==================================================
 

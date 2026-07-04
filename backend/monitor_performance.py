@@ -300,35 +300,23 @@ def main():
             twd_metrics = {"sharpe": 0.0, "sortino": 0.0, "mdd": 0.0, "data_points": 0}
             usd_metrics = {"sharpe": 0.0, "sortino": 0.0, "mdd": 0.0, "data_points": 0}
 
-        # 2. Fetch historical peak NAVs to evaluate current asset drop
-        twd_navs = [r["total_nav"] for r in db.get_portfolio_nav_history("TWD")]
-        usd_navs = [r["total_nav"] for r in db.get_portfolio_nav_history("USD")]
-
-        twd_peak = max(twd_navs + [twd_nav]) if twd_navs else twd_nav
-        usd_peak = max(usd_navs + [usd_nav]) if usd_navs else usd_nav
-
-        twd_drop = (twd_peak - twd_nav) / twd_peak if twd_peak > 0.0 else 0.0
-        usd_drop = (usd_peak - usd_nav) / usd_peak if usd_peak > 0.0 else 0.0
-
-        twd_mdd = twd_metrics.get("mdd", 0.0)
-        usd_mdd = usd_metrics.get("mdd", 0.0)
-
-        # 3. Determine if watchdog alert is triggered (MDD > dynamic warning limit or drop from peak > dynamic warning limit)
-        from core.regime.registry import get_macro_regime
-        from core.risk.risk_manager import get_dynamic_mdd_limit
+        # 2. Call centralized risk circuit breaker check for TWD and USD pockets
+        from core.risk.risk_manager import check_risk_circuit_breaker
         
-        twd_regime_info = get_macro_regime("Taiwan")
-        usd_regime_info = get_macro_regime("US")
+        twd_res = check_risk_circuit_breaker("TWD", "Taiwan", twd_nav, twd_metrics)
+        twd_triggered = twd_res["triggered"]
+        twd_drop = twd_res["current_drop"]
+        twd_mdd_limit = twd_res["mdd_limit"]
+        twd_mdd = twd_res["current_mdd"]
+        twd_peak = twd_res["peak_nav"]
         
-        twd_regime_name = twd_regime_info.get("regime", "VOLATILE_RANGEBOUND")
-        usd_regime_name = usd_regime_info.get("regime", "VOLATILE_RANGEBOUND")
+        usd_res = check_risk_circuit_breaker("USD", "US", usd_nav, usd_metrics)
+        usd_triggered = usd_res["triggered"]
+        usd_drop = usd_res["current_drop"]
+        usd_mdd_limit = usd_res["mdd_limit"]
+        usd_mdd = usd_res["current_mdd"]
+        usd_peak = usd_res["peak_nav"]
         
-        twd_mdd_limit = get_dynamic_mdd_limit(twd_regime_name, "TWD")
-        usd_mdd_limit = get_dynamic_mdd_limit(usd_regime_name, "USD")
-
-        
-        twd_triggered = (twd_mdd > twd_mdd_limit) or (twd_drop > twd_mdd_limit)
-        usd_triggered = (usd_mdd > usd_mdd_limit) or (usd_drop > usd_mdd_limit)
         trigger_warning = twd_triggered or usd_triggered
 
         # Sync Circuit Breaker states in the database

@@ -22,7 +22,7 @@ class MacroAgent(BaseAgent):
             system_instruction=SYSTEM_INSTRUCTION
         )
 
-    def analyze(self, region_name: str, benchmark_data: dict, news_data: list, price_info: dict = None) -> str:
+    def analyze(self, region_name: str, benchmark_data: dict, news_data: list, price_info: dict = None, macro_indicators: dict = None) -> str:
         """Executes the macro analysis for a given region."""
         # Format the input prompt with tools data
         formatted_news = ""
@@ -41,6 +41,23 @@ class MacroAgent(BaseAgent):
                 f"* Hurst Exponent (赫斯特指數/趨勢持久度): {price_info.get('hurst', 0.0):.2f} (歷史百分位數: {price_info.get('hurst_percentile', 0.0)*100:.1f}%)\n"
             )
             
+        formatted_macro = ""
+        if macro_indicators:
+            formatted_macro = "\n【全球多維金融與總經指標 (Global Financial & Macro Indicators)】:\n"
+            sectors = macro_indicators.get("sectors", {})
+            if sectors:
+                formatted_macro += "* 行業與相關指數績效:\n"
+                for name, data in sectors.items():
+                    formatted_macro += f"  - {name} ({data['ticker']}): 當前點數: {data['current_price']:,.2f} | 週變動率: {data['weekly_return']*100:+.2f}%\n"
+            macro = macro_indicators.get("macro", {})
+            if macro:
+                formatted_macro += "* 全球總經與風險指標:\n"
+                for name, data in macro.items():
+                    val = data["value"]
+                    change = data["weekly_change"]
+                    unit = "%" if name in ["VIX", "US10Y"] else ""
+                    formatted_macro += f"  - {name} ({data['ticker']}): {val:.2f}{unit} | 週變動: {change:+.2f}{unit}\n"
+            
         prompt = f"""
 請針對【{region_name}】進行總體經濟環境深度分析。
 
@@ -51,6 +68,7 @@ class MacroAgent(BaseAgent):
 * 週報酬率: {benchmark_data.get('weekly_return', 0)*100:.2f}%
 * 月報酬率: {benchmark_data.get('monthly_return', 0)*100:.2f}%
 {formatted_price_regime}
+{formatted_macro}
 
 【當週最新相關總經新聞摘要】：
 {formatted_news if formatted_news else "（暫無相關最新總經新聞）"}

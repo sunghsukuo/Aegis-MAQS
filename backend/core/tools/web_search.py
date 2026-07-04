@@ -236,3 +236,15 @@ def get_macro_news(region_code: str, max_items: int = 5) -> list:
     else:
         query = f"{region_code} macroeconomic financial news"
         return search_news(query, max_items, language="en-US", region="US")
+
+def get_thematic_industry_news(region_code: str, max_items: int = 5) -> list:
+    """Fetches trending industry/technology themes and brokerage research news."""
+    if region_code == "US":
+        query = "(US OR Wall Street) (intitle:\"industry trends\" OR intitle:\"investment themes\" OR intitle:\"growth stocks\" OR intitle:\"brokerage research\") -intitle:\"crypto\" -intitle:\"bitcoin\" when:7d"
+        return search_news(query, max_items, language="en-US", region="US")
+    elif region_code == "Taiwan":
+        query = "(台股 OR 台灣 OR 券商 OR 投顧) (intitle:\"產業趨勢\" OR intitle:\"熱門概念股\" OR intitle:\"投研報告\" OR intitle:\"題材\") -intitle:\"虛擬貨幣\" -intitle:\"比特幣\" when:7d"
+        return search_news(query, max_items, language="zh-TW", region="TW")
+    else:
+        query = f"{region_code} hot industry trends technology news"
+        return search_news(query, max_items, language="en-US", region="US")

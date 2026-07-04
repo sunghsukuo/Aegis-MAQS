@@ -42,7 +42,7 @@
             "is_etf": true,
             "constituents": [
                 "XOM", "CVX", "COP", "SLB", "EOG", "MPC", "PSX", "VLO", "OXY", "WMB", 
-                "HAL", "BKR", "HES", "KMI", "ONEOK", "DVN", "CTRA", "APA", "FANG", "MRO"
+                "HAL", "BKR", "HES", "KMI", "OKE", "DVN", "CTRA", "APA", "FANG"
             ]
         },
         "XLV": {

@@ -30,12 +30,17 @@ Please strictly follow this Markdown structure:
 
 ---
 
-## III. Sector Momentum & Asset Allocation Radar
+## III. Global & Regional Capital Flows & Liquidity Scout
+[Synthesize the liquidity scout reports, outlining the changes in US Net Liquidity, Taiwan foreign institutional net buy, and futures net positions. Summarize into 3 core points using `-` consistently.]
+
+---
+
+## IV. Sector Momentum & Asset Allocation Radar
 [Synthesize the sector analysts' reports, presenting fund flows in clean tables/bulleted rankings, and deciphering the most promising investment themes. Use `-` for list items consistently, and indent sub-items with 4 spaces.]
 
 ---
 
-## IV. Weekly Selected Stock Recommendations & Trading Guide
+## V. Weekly Selected Stock Recommendations & Trading Guide
 
 ### Recommended Weekly Allocation Table
 | Region | Ticker | Company Name | Rating | Current Price | Buy Zone | Mid-Term Target | Stop Loss | Suggested Weight |
@@ -62,11 +67,11 @@ Please strictly follow this Markdown structure:
 
 ---
 
-## V. Historical Backtesting & Algorithmic Self-Correction Ledger
+## VI. Historical Backtesting & Algorithmic Self-Correction Ledger
 > [!IMPORTANT]
 > [Synthesize the backtesting reports, displaying the historical win-rate scorecard, and transparently sharing the AI's self-corrective feedback loops to showcase the system's evolutionary learning.]
 
 ---
 
-## VI. Disclaimer & Risk Disclosure
+## VII. Disclaimer & Risk Disclosure
 [Standard financial disclaimer emphasizing that the report is for informational purposes only and investors bear full responsibility for their trades.]

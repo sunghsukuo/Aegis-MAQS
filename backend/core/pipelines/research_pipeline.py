@@ -28,6 +28,7 @@ from core.agents.reflection_agent import ReflectionAgent
 from core.agents.writer_agent import WriterAgent
 from core.tools.valuation_engine import ValuationEngine
 from core.utils.parsers import extract_price_from_line, extract_range_from_line
+from core.tools.utils import get_cached_data
 
 def print_info(msg): print(f"\033[96m[*] {msg}\033[0m")
 def print_warning(msg): print(f"\033[93m[!] {msg}\033[0m")
@@ -46,7 +47,8 @@ def research_and_track_asset(
     save_to_db: bool = True,
     is_weekly_pipeline: bool = True,
     custom_recommend_reason: str = None,
-    price_regime: str = None
+    price_regime: str = None,
+    source_track: str = None
 ) -> dict:
     """
     統一「單一標的深度分析與模擬下單/追蹤管線」。
@@ -138,6 +140,21 @@ def research_and_track_asset(
                 except ValueError:
                     pass
                     
+    # 🕵️‍♂️ 決策防線聯動：降級防守，禁止封殺
+    # 若標的來源於「板塊動能/防禦 Beta (趨勢/回歸)」或「前瞻主題」選股軌道（即資金與趨勢驅動型），
+    # 且大模型評級為 Sell/Avoid（避開），則強制將其評級提升至 "Hold"，分配 5% 的極輕倉位以防「定性恐高」封殺強勢股行情。
+    is_trend_or_theme = False
+    if source_track:
+        s_track_upper = source_track.upper()
+        if "動能" in source_track or "防禦" in source_track or "主題" in source_track or "BETA" in s_track_upper or "THEMATIC" in s_track_upper:
+            is_trend_or_theme = True
+            
+    if rating == "Sell" and is_trend_or_theme:
+        rating = "Hold"
+        override_msg = " [⚠️ 決策防線聯動：因該標的屬資金流動能/前瞻主題驅動，為避免大模型基本面定性恐高而完全封殺強勢股，啟動「降級防守」模式，將評級修正為 Hold 並配以 5% 的防守性輕倉，同時收緊移動止損。]"
+        custom_recommend_reason = (custom_recommend_reason or f"Aegis-MAQS 自動分析。當前大盤狀態: {macro_regime}。") + override_msg
+        print(f"\033[93m[🛡️ 決策防線聯動] 偵測到 {ticker} 屬動能/主題型標的且被評為 Sell，啟動「降級防守」提升評級為 Hold，配以 5% 部位。\033[0m")
+
     # Option A: Quant decides, LLM adjusts weight (Hold is allocated a starter 5% weight instead of being blocked)
     if rating == "Hold":
         if suggested_weight is not None:
@@ -148,7 +165,7 @@ def research_and_track_asset(
         if suggested_weight is None: suggested_weight = 0.25
     elif rating == "Buy":
         if suggested_weight is None: suggested_weight = 0.15
-    else: # Sell or Avoid
+    else: # Sell or Avoid (Only Track 2 or purely fundamental stocks can be fully vetoed here)
         suggested_weight = 0.0
 
     invested_amount = 0.0
@@ -184,7 +201,8 @@ def research_and_track_asset(
                 invested_amount=invested_amount,
                 shares=shares,
                 macro_regime=macro_regime,
-                price_regime=price_regime
+                price_regime=price_regime,
+                source_track=source_track
             )
             
             if invested_amount > 0.0:
@@ -321,8 +339,9 @@ def analyze_macro_regime(region_code: str, price_info: dict = None, dry_run: boo
     and returns (macro_report, macro_regime).
     """
     region_name = REGIONS[region_code]["name"]
-    # 1. Get Benchmark Performance
-    benchmark_data = yf_tool.get_benchmark_performance(region_code)
+    # 1. Get Benchmark Performance & Multi-dimensional Macro Indicators
+    macro_indicators = yf_tool.get_macro_indicators(region_code)
+    benchmark_data = macro_indicators.get("benchmark", {})
     
     # 2. Get Macroeconomic News
     macro_news = search_tool.get_macro_news(region_code, max_items=5)
@@ -330,7 +349,7 @@ def analyze_macro_regime(region_code: str, price_info: dict = None, dry_run: boo
     # 3. Run Macro Agent
     print_info(f"[{region_name}] 正在執行總體經濟分析...")
     macro_agent = MacroAgent()
-    raw_macro_report = macro_agent.analyze(region_name, benchmark_data, macro_news, price_info=price_info)
+    raw_macro_report = macro_agent.analyze(region_name, benchmark_data, macro_news, price_info=price_info, macro_indicators=macro_indicators)
     
     # [Prompt Evolution Integration] Log MacroAgent's inference
     if not dry_run:
@@ -359,150 +378,64 @@ def analyze_macro_regime(region_code: str, price_info: dict = None, dry_run: boo
     
     return macro_report, macro_regime
 
-def run_regional_analysis(region_code: str, report_date: str, reflection_directives: str) -> tuple:
+
+def run_liquidity_analysis(region_code: str, report_date: str, dry_run: bool = False) -> tuple:
     """
-    Executes the analytical pipeline for a specific country/region:
-    Macro Analysis -> Sector Rankings -> News Scans -> Fundamental Valuation & Stock Recommendation.
+    Executes Macro Liquidity and Capital Flow Analysis via LiquidityScoutAgent,
+    logs the inference in the database, and returns (liquidity_report, liquidity_regime).
+    Supports time-travel backtesting by automatically checking simulated date.
     """
     region_name = REGIONS[region_code]["name"]
-    print_info(f"==================================================")
-    print_info(f"開始分析區域市場：{region_name} ({region_code})...")
     
-    # Detect price regime (quantitative ADX/Hurst) first to anchor macro analysis
-    from core.regime.price_regime import detect_region as detect_price_regime
-    price_info = detect_price_regime(region_code)
-    price_regime = price_info.get("regime", "MOMENTUM_TREND")
-    print_info(f"[{region_name}] 偵測到價格氣候 (Price Regime): {price_regime} (ADX={price_info.get('adx', 'N/A'):.1f}, Hurst={price_info.get('hurst', 'N/A'):.2f})")
-    
-    # Run macroeconomic analysis & extract macro regime
-    macro_report, macro_regime = analyze_macro_regime(region_code, price_info=price_info, report_date=report_date)
-    
-    # 4. Get Sector Rankings
-    sector_rankings = yf_tool.get_sector_rankings(region_code)
-    
-    # 5. Run Market Agent with dynamic sector news integration
-    print_info(f"[{region_name}] 正在獲取最強勢板塊之產業趨勢新聞...")
-    sector_news = []
+    # 1. Determine if we are in backtest mode to prevent lookahead bias
+    is_backtest_mode = False
+    query_date = report_date
     try:
-        # Find top 2 sectors (excluding broad market if possible to focus on specific industries)
-        c_sectors = [sec for sec in sector_rankings if "Broad Market" not in sec["label"]]
-        if not c_sectors:
-            c_sectors = sector_rankings
-            
-        top_2_sectors = c_sectors[:2]
-        for sec in top_2_sectors:
-            label = sec["label"]
-            # Extract characters before parenthesis, e.g. "科技" from "科技 (Technology)"
-            match = re.match(r"^([^\(]+)", label)
-            sector_name = match.group(1).strip() if match else label
-            
-            if region_code == "US":
-                query = f"US {sector_name} industry news when:7d"
-                lang, reg = "en-US", "US"
-            else:
-                query = f"台灣 {sector_name} 產業 新聞 when:7d"
-                lang, reg = "zh-TW", "TW"
-                
-            print_info(f"   - 正在檢索板塊【{label}】產業動向: '{query}'")
-            news_items = search_tool.search_news(query, max_items=2, language=lang, region=reg)
-            sector_news.extend(news_items)
-            time.sleep(2)  # Respect free tier rate limits
-    except Exception as sector_news_ex:
-        print_error(f"[{region_name}] 獲取板塊相關產業新聞時失敗: {sector_news_ex}")
+        from backtest.replayer import get_simulated_date
+        sim_date = get_simulated_date()
+        if sim_date:
+            is_backtest_mode = True
+            query_date = sim_date
+    except Exception:
+        pass
         
-    print_info(f"[{region_name}] 正在進行板塊強度排序與資金流向分析...")
-    market_agent = MarketAgent()
-    market_report = market_agent.analyze(region_name, sector_rankings, sector_news)
+    # 2. Load quantitative liquidity state
+    from core.tools.liquidity_loader import get_liquidity_state
+    liquidity_state = get_liquidity_state(query_date, is_backtest=is_backtest_mode)
     
-    # [Prompt Evolution Integration] Log MarketAgent's inference
-    try:
-        db.save_agent_inference_log(
-            rec_id=None,
-            agent_name="MarketAgent",
-            ticker=None,
-            input_prompt=market_agent.last_prompt,
-            output_response=market_report,
-            prompt_version=market_agent.prompt_version,
-            report_date=report_date
-        )
-    except Exception as log_ex:
-        print(f"[!] Warning: 記錄 MarketAgent 推論日誌失敗: {log_ex}")
-        
-    time.sleep(3)  # Respect free tier rate limits (15 RPM)
+    # 3. Run Liquidity Scout Agent
+    print_info(f"[{region_name}] 正在執行全球與區域流動性偵察分析...")
+    from core.agents.liquidity_agent import LiquidityScoutAgent
+    agent = LiquidityScoutAgent()
+    raw_report = agent.analyze(region_name, liquidity_state)
     
-    # 6. Parse Top Recommended Sectors/Themes from Market Agent's report using LLM guidance
-    max_scan_sectors = max(MAX_SECTORS_PER_REGION, MAX_STOCKS_PER_REGION)
-    top_etfs = [sec["ticker"] for sec in sector_rankings[:max_scan_sectors]]
-    print_info(f"[{region_name}] 本週焦點強勢板塊 ETF (自適應擴大)：{', '.join(top_etfs)}")
-    
-    # 7. Dynamic Target Discovery & Fundamental Valuation
-    stock_analysis_reports = []
-    stocks_analyzed = 0
-    
-    # Scrape news & evaluate representative stock assets for the top performing sector ETFs
-    for etf_ticker in top_etfs:
-        if stocks_analyzed >= MAX_STOCKS_PER_REGION:
-            break
-            
-        # Get sector configuration (prioritize database-driven configuration)
-        sector_config = db.get_active_sectors(region_code).get(etf_ticker, {})
-        target_type = sector_config.get("target_type", "constituents")
-        
-        if target_type == "proxy":
-            # If target_type is proxy, we target the ETF itself directly
-            target_stocks = [{
-                "ticker": etf_ticker,
-                "name": f"{sector_config.get('name', etf_ticker)}"
-            }]
-            print_info(f"[{region_name}] 板塊 {etf_ticker} 配置為直接投資 ETF 標的 (target_type: proxy)。")
-        else:
-            # Otherwise, target constituent stocks
-            representative_stocks = yf_tool.screen_sector_candidates(etf_ticker, region=region_code, macro_regime=macro_regime, price_regime=price_regime)
-            # Determine how many stocks to pull from this sector to respect our region limit
-            stocks_to_analyze = max(1, MAX_STOCKS_PER_REGION - stocks_analyzed)
-            # Grab at most 2 per sector for diversity if total limit allows, otherwise grab remaining
-            stocks_to_analyze = min(stocks_to_analyze, 2)
-            target_stocks = representative_stocks[:stocks_to_analyze]
-            print_info(f"[{region_name}] 板塊 {etf_ticker} 配置為投資旗下成分股 (target_type: constituents)。")
-        
-        for stock in target_stocks:
-            ticker = stock["ticker"]
-            name = stock["name"]
-            print_info(f"[{region_name}] 🔍 正在對目標標的進行深度研究：{name} ({ticker})...")
-            
-            custom_reason = f"直接買入強勢板塊 ETF {etf_ticker}，獲取行業平均 Beta 收益。" if target_type == "proxy" else f"板塊 {etf_ticker} 強勢動能領頭，精選旗下龍頭成分股。"
-            
-            res = research_and_track_asset(
-                ticker=ticker,
-                company_name=name,
-                region_code=region_code,
-                macro_regime=macro_regime,
-                macro_report=macro_report,
-                reflection_directives=reflection_directives,
-                report_date=report_date,
-                save_to_db=True,
-                custom_recommend_reason=custom_reason,
-                price_regime=price_regime
+    # 4. Log the inference to database
+    if not dry_run:
+        try:
+            db.save_agent_inference_log(
+                rec_id=None,
+                agent_name="LiquidityScoutAgent",
+                ticker=None,
+                input_prompt=agent.last_prompt,
+                output_response=raw_report,
+                prompt_version=agent.prompt_version,
+                report_date=report_date
             )
+        except Exception as log_ex:
+            print(f"[!] Warning: 記錄 LiquidityScoutAgent 推論日誌失敗: {log_ex}")
             
-            if not res:
-                continue
-                
-            # If target_type is proxy, record in the screener report now with enriched financials and weekly return!
-            if target_type == "proxy":
-                try:
-                    etf_rank = next((sec for sec in sector_rankings if sec["ticker"] == etf_ticker), {})
-                    weekly_mom = etf_rank.get("weekly_return", 0.0)
-                    screener_instance = yf_tool.get_screener_instance()
-                    screener_instance.record_proxy_etf(etf_ticker, region_code, financials=res["financials"], weekly_return=weekly_mom)
-                except Exception as ex:
-                    print_warning(f"記錄篩選報告 proxy ETF 失敗: {ex}")
-                    
-            stock_analysis_reports.append(res["stock_report"])
-            print_success(f"標的 {ticker} 推薦參數與預算已成功寫入回測帳本！(現價: {res['financials'].get('current_price', 0.0):.2f} | 分配預算: {res['invested_amount']:.2f} | 股數: {res['shares']:.2f})")
-            stocks_analyzed += 1
-                
-    return macro_report, market_report, "\n\n---\n\n".join(stock_analysis_reports), macro_regime
+    time.sleep(3)  # Respect API rate limits
+    
+    # 5. Parse liquidity regime from report
+    import re
+    regime_match = re.search(r"\[LIQUIDITY_REGIME:\s*(EXPANSION|NEUTRAL|CONTRACTION)\]", raw_report)
+    liquidity_regime = regime_match.group(1) if regime_match else "NEUTRAL"
+    print_success(f"[{region_name}] 偵測到流動性狀態標籤：{liquidity_regime}")
+    
+    # Clean the raw tag from report so it doesn't show in the final human-readable report
+    liquidity_report = re.sub(r"\[LIQUIDITY_REGIME:\s*(EXPANSION|NEUTRAL|CONTRACTION)\]\s*", "", raw_report)
+    
+    return liquidity_report, liquidity_regime
 
 def run_report_pipeline(args, report_date, regions_list, timestamp_suffix, daily_reports_dir):
     print_success("==================================================")
@@ -513,36 +446,42 @@ def run_report_pipeline(args, report_date, regions_list, timestamp_suffix, daily
         print_success(f"執行單一階段：{phase}")
     print_success("==================================================")
     
-    if not phase:
-        existing_report = db.get_report_by_date(report_date)
-        existing_recs_count = 0
-        with db.db_session() as conn:
-            cursor = conn.cursor()
-            db.execute_sql(
-                cursor,
-                "SELECT COUNT(*) FROM recommendations WHERE report_date = ?",
-                "SELECT COUNT(*) FROM recommendations WHERE report_date = %s",
-                (report_date,)
-            )
-            row = cursor.fetchone()
-            if row:
-                existing_recs_count = row["COUNT(*)"] if isinstance(row, dict) else row[0]
-                
-        if (existing_report or existing_recs_count > 0) and not args.force:
-            print_warning(f"偵測到資料庫中已存在【{report_date}】的投資報告或推薦記錄。")
-            print_warning("使用 --force 參數可強制重新運行，系統將自動清理舊資料以確保資料庫一致性。")
-            sys.exit(0)
+    existing_report = db.get_report_by_date(report_date)
+    existing_recs_count = 0
+    with db.db_session() as conn:
+        cursor = conn.cursor()
+        db.execute_sql(
+            cursor,
+            "SELECT COUNT(*) FROM recommendations WHERE report_date = ?",
+            "SELECT COUNT(*) FROM recommendations WHERE report_date = %s",
+            (report_date,)
+        )
+        row = cursor.fetchone()
+        if row:
+            existing_recs_count = row["COUNT(*)"] if isinstance(row, dict) else row[0]
             
-        if args.force or existing_recs_count > 0 or existing_report:
-            print_info(f"正在自動清理與還原【{report_date}】的舊有報告與交易記錄，確保資料庫一致性...")
-            db.rollback_reports_and_recommendations(report_date)
+    # Safety warnings and database rollbacks only apply to full runs or the stock analysis phase
+    is_writing_phase = (not phase) or (phase == "analyze_stocks")
+    
+    if is_writing_phase and (existing_report or existing_recs_count > 0) and not args.force:
+        print_warning(f"偵測到資料庫中已存在【{report_date}】的投資報告或推薦記錄。")
+        print_warning("使用 --force 參數可強制重新運行，系統將自動清理舊資料以確保資料庫一致性。")
+        sys.exit(0)
+        
+    if is_writing_phase and (args.force or existing_recs_count > 0 or existing_report):
+        print_info(f"正在自動清理與還原【{report_date}】的舊有報告與交易記錄，確保資料庫一致性...")
+        db.rollback_reports_and_recommendations(report_date)
+        
+        # Only delete state file if running the entire pipeline (not a single phase)
+        if not phase:
             from core.config import CACHE_DIR
             state_file = CACHE_DIR / f"pipeline_state_{report_date}.json"
             if state_file.exists():
                 try:
                     state_file.unlink()
-                except Exception:
-                    pass
+                    print_info(f"已清理舊有的快取狀態檔案: {state_file}")
+                except Exception as e:
+                    print_warning(f"清理快取狀態檔案失敗: {e}")
 
     state = load_pipeline_state(report_date)
     init_pipeline_state_dates(state)
@@ -1044,14 +983,14 @@ def run_reflection_phase(regions_list: list, report_date: str, state: dict):
 
 def run_analyze_macro_phase(regions_list: list, report_date: str, state: dict):
     print_info("==================================================")
-    print_info(f"[Phase 2/10] 總體經濟情境分析 (analyze_macro)")
+    print_info(f"[Phase 2/10] 總體經濟情境與市場流動性分析 (analyze_macro)")
     print_info("==================================================")
     if "analysis" not in state:
         state["analysis"] = {}
         
     for r_code in regions_list:
         region_name = REGIONS[r_code]["name"]
-        print_info(f"[{region_name}] 正在執行總體經濟分析...")
+        print_info(f"[{region_name}] 正在執行總體經濟與流動性分析...")
         if r_code not in state["analysis"]:
             state["analysis"][r_code] = {}
         
@@ -1060,7 +999,11 @@ def run_analyze_macro_phase(regions_list: list, report_date: str, state: dict):
         price_info = detect_price_regime(r_code)
         price_regime = price_info.get("regime", "MOMENTUM_TREND")
         
+        # Run macroeconomic analysis
         macro_report, macro_regime = analyze_macro_regime(r_code, price_info=price_info, report_date=report_date)
+        
+        # Run Liquidity Scout analysis
+        liq_report, liq_regime = run_liquidity_analysis(r_code, report_date=report_date)
         
         try:
             from core.regime.registry import save_macro_regime
@@ -1077,8 +1020,10 @@ def run_analyze_macro_phase(regions_list: list, report_date: str, state: dict):
         state["analysis"][r_code]["price_regime"] = price_regime
         state["analysis"][r_code]["macro_report"] = macro_report
         state["analysis"][r_code]["macro_regime"] = macro_regime
+        state["analysis"][r_code]["liquidity_report"] = liq_report
+        state["analysis"][r_code]["liquidity_regime"] = liq_regime
         time.sleep(3)
-    print_success("[✓] 總體經濟情境分析執行完成。")
+    print_success("[✓] 總體經濟情境與市場流動性分析執行完成。")
 
 def run_analyze_sectors_phase(regions_list: list, report_date: str, state: dict):
     print_info("==================================================")
@@ -1155,9 +1100,21 @@ def run_analyze_sectors_phase(regions_list: list, report_date: str, state: dict)
         except Exception as log_ex:
             print(f"[!] Warning: 記錄 MarketAgent 推論日誌失敗: {log_ex}")
             
+        # Extract themes via MarketAgent using general thematic news (decoupled from sector list)
+        print_info(f"[{region_name}] 正在獲取全市場前瞻產業與投研主題新聞...")
+        try:
+            thematic_news = search_tool.get_thematic_industry_news(r_code, max_items=5)
+            print_info(f"[{region_name}] 正在利用 MarketAgent 進行前瞻主題關鍵字萃取...")
+            themes = market_agent.extract_themes_from_news(thematic_news)
+            print_success(f"[{region_name}] 成功萃取前瞻產業主題：{', '.join(themes)}")
+        except Exception as theme_ex:
+            print_warning(f"[{region_name}] 萃取前瞻產業主題失敗: {theme_ex}")
+            themes = ["AI硬體", "半導體"]
+            
         state["analysis"][r_code]["price_regime"] = price_regime
         state["analysis"][r_code]["sector_rankings"] = sector_rankings
         state["analysis"][r_code]["market_report"] = market_report
+        state["analysis"][r_code]["themes"] = themes
         time.sleep(3)
     print_success("[✓] 產業板塊資金流分析執行完成。")
 
@@ -1221,9 +1178,61 @@ def run_screen_targets_phase(regions_list: list, report_date: str, state: dict):
         screener_instance = yf_tool.get_screener_instance()
         screener_instance.clear_history()
         
+        # --- 雙向資料庫對照：載入全市場候選股池 ---
+        all_tickers = []
+        try:
+            with db.db_session() as conn:
+                cursor = conn.cursor()
+                query_sqlite = """
+                    SELECT DISTINCT sc.ticker, sc.company_name 
+                    FROM sector_constituents sc 
+                    JOIN sector_registry sr ON sc.sector_id = sr.id 
+                    WHERE sr.region = ? AND sr.is_active = 1
+                """
+                query_mysql = """
+                    SELECT DISTINCT sc.ticker, sc.company_name 
+                    FROM sector_constituents sc 
+                    JOIN sector_registry sr ON sc.sector_id = sr.id 
+                    WHERE sr.region = %s AND sr.is_active = 1
+                """
+                db.execute_sql(cursor, query_sqlite, query_mysql, (r_code,))
+                rows = cursor.fetchall()
+                for row in rows:
+                    if isinstance(row, dict):
+                        all_tickers.append({"ticker": row["ticker"], "name": row["company_name"]})
+                    else:
+                        all_tickers.append({"ticker": row[0], "name": row[1]})
+        except Exception as db_ex:
+            print_warning(f"[{region_name}] 無法從資料庫獲取候選個股: {db_ex}")
+            
+        if not all_tickers:
+            print_info(f"[{region_name}] 啟用靜態設定檔作為全市場候選股備用資料...")
+            try:
+                sectors = REGIONS.get(r_code, {}).get("sector_etfs", {})
+                for etf, info in sectors.items():
+                    constituents = info.get("constituents", [])
+                    for t in constituents:
+                        all_tickers.append({"ticker": t, "name": t})
+            except Exception:
+                pass
+                
+        for item in all_tickers:
+            if not item.get("name"):
+                item["name"] = item["ticker"]
+                
+        # --- 軌道一：板塊動能/防禦 Beta ---
+        if "REVERSION" in price_regime or "RANGEBOUND" in price_regime or price_regime == "MEAN_REVERSION_RANGE":
+            track1_label = "sector_reversion"
+            track1_desc = "板塊防禦 Beta (均值回歸)"
+        else:
+            track1_label = "sector_momentum"
+            track1_desc = "板塊動能 Beta (趨勢跟隨)"
+            
+        print_info(f"[{region_name}] 正在執行 軌道一：{track1_desc} 選股...")
+        track1_stocks = []
         stocks_screened = 0
         for etf_ticker in top_etfs:
-            if stocks_screened >= MAX_STOCKS_PER_REGION:
+            if stocks_screened >= 2:
                 break
                 
             sector_config = db.get_active_sectors(r_code).get(etf_ticker, {})
@@ -1234,9 +1243,10 @@ def run_screen_targets_phase(regions_list: list, report_date: str, state: dict):
                     "ticker": etf_ticker,
                     "name": f"{sector_config.get('name', etf_ticker)}",
                     "target_type": "proxy",
-                    "etf_ticker": etf_ticker
+                    "etf_ticker": etf_ticker,
+                    "source_track": track1_label,
+                    "reason": f"隸屬焦點板塊 {etf_ticker} (動能領先)，以 proxy 模式直接配置板塊 ETF 獲取 Beta 收益。"
                 }]
-                print_info(f"[{region_name}] 板塊 {etf_ticker} 配置為直接投資 ETF 標的 (target_type: proxy)。")
             else:
                 representative_stocks = yf_tool.screen_sector_candidates(etf_ticker, region=r_code, macro_regime=macro_regime, price_regime=price_regime)
                 if not representative_stocks:
@@ -1244,26 +1254,190 @@ def run_screen_targets_phase(regions_list: list, report_date: str, state: dict):
                         "ticker": etf_ticker,
                         "name": f"{sector_config.get('name', etf_ticker)}",
                         "target_type": "proxy",
-                        "etf_ticker": etf_ticker
+                        "etf_ticker": etf_ticker,
+                        "source_track": track1_label,
+                        "reason": f"焦點板塊 {etf_ticker} 成分股皆未通過量化篩選，遞補直接配置板塊 ETF 本身。"
                     }]
-                    print_warning(f"[{region_name}] 板塊 {etf_ticker} 所有成分股均未通過量化篩選！自動啟動 B 方案：遞補為直接投資板塊 ETF 本身 (target_type: proxy) 以獲取板塊 Beta 收益。")
                 else:
-                    stocks_to_analyze = max(1, MAX_STOCKS_PER_REGION - stocks_screened)
-                    stocks_to_analyze = min(stocks_to_analyze, 2)
+                    stocks_to_analyze = min(len(representative_stocks), 2)
                     target_stocks = representative_stocks[:stocks_to_analyze]
                     for s in target_stocks:
                         s["target_type"] = "constituents"
                         s["etf_ticker"] = etf_ticker
-                    print_info(f"[{region_name}] 板塊 {etf_ticker} 配置為投資旗下成分股 (target_type: constituents)。")
-                
-            state["analysis"][r_code]["target_stocks"].extend(target_stocks)
+                        s["source_track"] = track1_label
+                        s["reason"] = f"隸屬焦點強勢板塊 {etf_ticker}，成分股量化篩選評分領先。"
+            
+            track1_stocks.extend(target_stocks)
             stocks_screened += len(target_stocks)
             
+        # --- 軌道二：財務加速 Alpha ---
+        print_info(f"[{region_name}] 正在執行 軌道二：財務加速 Alpha 選股...")
+        track2_candidates = []
+        from core.config import CACHE_DIR
+        
+        fetched_count = 0
+        max_online_fetches = 300  # 當無快取時，提高至 300 檔以百分之百涵蓋所有分區候選股池 (美股 217 檔，台股 154 檔)
+        
+        for item in all_tickers:
+            ticker = item["ticker"]
+            cache_key = f"financials_{ticker.upper()}"
+            f_data = get_cached_data(CACHE_DIR, cache_key, ttl_hours=24)
+            if not f_data and fetched_count < max_online_fetches:
+                try:
+                    import time
+                    # 引入 0.5 秒小延遲，避免密集請求 yfinance API 觸發 rate limit
+                    time.sleep(0.5)
+                    f_data = yf_tool.get_stock_financials(ticker)
+                    fetched_count += 1
+                except Exception:
+                    pass
+            if f_data:
+                rev_growth = f_data.get("revenue_growth")
+                eps_growth = f_data.get("eps_growth")
+                if rev_growth is not None or eps_growth is not None:
+                    rg = rev_growth if rev_growth is not None else 0.0
+                    eg = eps_growth if eps_growth is not None else 0.0
+                    if rg > 0.15 or eg > 0.15:
+                        # 取得過濾因子
+                        pe_ratio = f_data.get("pe_ratio")
+                        peg_ratio = f_data.get("peg_ratio")
+                        fifty_day_sma = f_data.get("fifty_day_sma")
+                        current_price = f_data.get("current_price")
+                        
+                        # 1. 套用 PEG 篩選：放寬至 <= 1.5。
+                        # 若為轉機股（盈餘剛從負轉正，導致 PE/PEG 為 None 或負數），則保留不予誤殺。
+                        if peg_ratio is not None and peg_ratio > 1.5:
+                            continue
+                            
+                        # 2. 套用技術面趨勢篩選：價格必須高於 50日均線（Price >= 50-day SMA）
+                        if current_price is not None and fifty_day_sma is not None and current_price < fifty_day_sma:
+                            continue
+                            
+                        avg_growth = (rg + eg) / 2.0 if (rev_growth is not None and eps_growth is not None) else (rg or eg)
+                        
+                        # 格式化顯示過濾因子
+                        pe_str = f"{pe_ratio:.1f}" if pe_ratio is not None else "N/A"
+                        peg_str = f"{peg_ratio:.2f}" if peg_ratio is not None else "N/A (轉機股)"
+                        
+                        track2_candidates.append({
+                            "ticker": ticker,
+                            "name": item["name"],
+                            "target_type": "constituents",
+                            "etf_ticker": "N/A",
+                            "source_track": "bottom_up_acceleration",
+                            "avg_growth": avg_growth,
+                            "revenue_growth": rg,
+                            "eps_growth": eg,
+                            "pe_ratio": pe_ratio,
+                            "peg_ratio": peg_ratio,
+                            "fifty_day_sma": fifty_day_sma,
+                            "current_price": current_price,
+                            "reason": f"財務加速篩選：營收年增率 {rg*100:.1f}%, EPS年增率 {eg*100:.1f}% [過濾因子: PE={pe_str}, PEG={peg_str}, 已站上50日線]"
+                        })
+        track2_candidates.sort(key=lambda x: x["avg_growth"], reverse=True)
+        track2_stocks = track2_candidates[:2]
+        if track2_stocks:
+            print_success(f"[{region_name}] 軌道二成功篩選出財務加速個股：{[s['ticker'] for s in track2_stocks]}")
+        else:
+            print_warning(f"[{region_name}] 軌道二未篩選出符合標準（年增率 > 15%）的財務加速個股。")
+        
+        # --- 軌道三：前瞻主題 ---
+        print_info(f"[{region_name}] 正在執行 軌道三：前瞻主題選股...")
+        themes = state["analysis"][r_code].get("themes", [])
+        track3_stocks = []
+        if themes:
+            try:
+                market_agent = MarketAgent()
+                matched_thematic = market_agent.match_thematic_stocks(all_tickers, themes)
+                for item in matched_thematic:
+                    track3_stocks.append({
+                        "ticker": item["ticker"],
+                        "name": item["name"],
+                        "target_type": "constituents",
+                        "etf_ticker": "N/A",
+                        "source_track": "thematic_scan",
+                        "reason": f"前瞻主題篩選：{item['reason']}"
+                    })
+                print_success(f"[{region_name}] 軌道三成功篩選出主題概念股：{[s['ticker'] for s in track3_stocks]}")
+                
+                # --- 持久化儲存至資料庫 thematic 關聯表 ---
+                try:
+                    with db.db_session() as conn:
+                        cursor = conn.cursor()
+                        for t_name in themes:
+                            t_name_stripped = t_name.strip()
+                            # 1. 寫入或取得主題 ID
+                            if db.DB_TYPE == "mysql":
+                                cursor.execute("SELECT id FROM thematic_registry WHERE theme_name = %s", (t_name_stripped,))
+                                row = cursor.fetchone()
+                                if row:
+                                    theme_id = row["id"]
+                                else:
+                                    cursor.execute("INSERT INTO thematic_registry (theme_name) VALUES (%s)", (t_name_stripped,))
+                                    theme_id = cursor.lastrowid
+                            else:
+                                cursor.execute("SELECT id FROM thematic_registry WHERE theme_name = ?", (t_name_stripped,))
+                                row = cursor.fetchone()
+                                if row:
+                                    theme_id = row[0]
+                                else:
+                                    cursor.execute("INSERT INTO thematic_registry (theme_name) VALUES (?)", (t_name_stripped,))
+                                    theme_id = cursor.lastrowid
+                            
+                            # 2. 寫入或更新概念股對照關係
+                            for item in matched_thematic:
+                                t_ticker = item.get("ticker", "").strip().upper()
+                                t_reason = item.get("reason", "").strip()
+                                
+                                if db.DB_TYPE == "mysql":
+                                    cursor.execute("SELECT id FROM thematic_constituents WHERE theme_id = %s AND ticker = %s", (theme_id, t_ticker))
+                                    c_row = cursor.fetchone()
+                                    if c_row:
+                                        cursor.execute("UPDATE thematic_constituents SET registered_reason = %s WHERE id = %s", (t_reason, c_row["id"]))
+                                    else:
+                                        cursor.execute("INSERT INTO thematic_constituents (theme_id, ticker, registered_reason) VALUES (%s, %s, %s)", (theme_id, t_ticker, t_reason))
+                                else:
+                                    cursor.execute("SELECT id FROM thematic_constituents WHERE theme_id = ? AND ticker = ?", (theme_id, t_ticker))
+                                    c_row = cursor.fetchone()
+                                    if c_row:
+                                        cursor.execute("UPDATE thematic_constituents SET registered_reason = ? WHERE id = ?", (t_reason, c_row[0]))
+                                    else:
+                                        cursor.execute("INSERT INTO thematic_constituents (theme_id, ticker, registered_reason) VALUES (?, ?, ?)", (theme_id, t_ticker, t_reason))
+                        conn.commit()
+                    print_info(f"[{region_name}] 主題與概念股對照關係已持久化儲存至資料庫。")
+                except Exception as db_save_ex:
+                    print_warning(f"[{region_name}] 無法將主題與概念股存入資料庫: {db_save_ex}")
+            except Exception as thematic_ex:
+                print_warning(f"[{region_name}] 軌道三選股執行失敗: {thematic_ex}")
+                
+        # --- 輪流融合與去重 (Round-Robin) ---
+        final_targets = []
+        seen_tickers = set()
+        
+        tracks = [track3_stocks, track2_stocks, track1_stocks]
+        max_len = max(len(t) for t in tracks) if tracks else 0
+        
+        for i in range(max_len):
+            for t in tracks:
+                if i < len(t):
+                    stock = t[i]
+                    ticker_upper = stock["ticker"].upper()
+                    if ticker_upper not in seen_tickers:
+                        seen_tickers.add(ticker_upper)
+                        final_targets.append(stock)
+                        if len(final_targets) >= MAX_STOCKS_PER_REGION:
+                            break
+            if len(final_targets) >= MAX_STOCKS_PER_REGION:
+                break
+                
+        state["analysis"][r_code]["target_stocks"] = final_targets
+        state["analysis"][r_code]["track2_candidates"] = track2_candidates
         state["analysis"][r_code]["screener_session_history"] = list(screener_instance.session_history)
         
-        print_info(f"[{region_name}] 篩選完成！本週待深度分析目標股清單：")
+        print_info(f"[{region_name}] 篩選完成！三軌融合最終待深度分析個股：")
         for idx, stock in enumerate(state["analysis"][r_code]["target_stocks"]):
-            print_info(f"   {idx+1}. {stock['name']} ({stock['ticker']}) [來源板塊: {stock['etf_ticker']}]")
+            track_name = "板塊動能 Beta (趨勢)" if stock["source_track"] == "sector_momentum" else "板塊防禦 Beta (回歸)" if stock["source_track"] == "sector_reversion" else "財務加速 Alpha" if stock["source_track"] == "bottom_up_acceleration" else "前瞻主題"
+            print_info(f"   {idx+1}. {stock['name']} ({stock['ticker']}) | 選股軌道: {track_name} | 篩選原因: {stock['reason']}")
             
     print_success("[✓] 量化選股與目標篩選執行完成。")
 
@@ -1296,12 +1470,22 @@ def run_analyze_stocks_phase(regions_list: list, report_date: str, state: dict):
         for stock in target_stocks:
             ticker = stock["ticker"]
             name = stock["name"]
+            if ".TW" in ticker.upper() or ".TWO" in ticker.upper():
+                from core.tools.taiwan_stock_names import get_taiwan_stock_name
+                tw_name = get_taiwan_stock_name(ticker)
+                if tw_name and tw_name != ticker:
+                    name = tw_name
             target_type = stock.get("target_type", "constituents")
             etf_ticker = stock.get("etf_ticker")
             
-            print_info(f"[{region_name}] 🔍 正在對目標標的進行深度研究：{name} ({ticker})...")
-            custom_reason = f"直接買入強勢板塊 ETF {etf_ticker}，獲取行業平均 Beta 收益。" if target_type == "proxy" else f"板塊 {etf_ticker} 強勢動能領頭，精選旗下龍頭成分股。"
+            s_track = stock.get("source_track")
+            s_reason = stock.get("reason")
             
+            if target_type == "proxy":
+                custom_reason = f"直接買入強勢板塊 ETF {etf_ticker}，獲取行業平均 Beta 收益。"
+            else:
+                custom_reason = s_reason or f"板塊 {etf_ticker} 強勢動能領頭，精選旗下龍頭成分股。"
+                
             res = research_and_track_asset(
                 ticker=ticker,
                 company_name=name,
@@ -1312,7 +1496,8 @@ def run_analyze_stocks_phase(regions_list: list, report_date: str, state: dict):
                 report_date=report_date,
                 save_to_db=True,
                 custom_recommend_reason=custom_reason,
-                price_regime=price_regime
+                price_regime=price_regime,
+                source_track=s_track
             )
             if not res:
                 continue
@@ -1331,7 +1516,9 @@ def run_analyze_stocks_phase(regions_list: list, report_date: str, state: dict):
                 "ticker": ticker,
                 "name": name,
                 "rating": res["rating"],
-                "etf_ticker": etf_ticker
+                "etf_ticker": etf_ticker,
+                "source_track": s_track,
+                "reason": s_reason
             })
             print_success(f"標的 {ticker} 推薦參數與預算已成功寫入回測帳本！(現價: {res['financials'].get('current_price', 0.0):.2f} | 分配預算: {res['invested_amount']:.2f} | 股數: {res['shares']:.2f})")
             
@@ -1357,6 +1544,7 @@ def run_weekly_report_phase(regions_list: list, report_date: str, timestamp_suff
             
         r_analysis = state["analysis"][r_code]
         mac_rep = r_analysis.get("macro_report")
+        liq_rep = r_analysis.get("liquidity_report") or "暫無流動性分析數據。"
         mkt_rep = r_analysis.get("market_report")
         stk_rep = r_analysis.get("stock_reports_combined")
         reflection_directives = state.get("reflection", {}).get(r_code, "（無自我反思修正指令）")
@@ -1369,7 +1557,9 @@ def run_weekly_report_phase(regions_list: list, report_date: str, timestamp_suff
             for item in analyzed_summary_list:
                 rating_label = "買入 Buy" if item['rating'] == "Buy" else "強烈買入 Strong Buy" if item['rating'] == "Strong Buy" else "持有 Hold" if item['rating'] == "Hold" else "避免買入 Avoid"
                 etf_lbl = f"（隸屬板塊/ETF: {item['etf_ticker']}）" if item.get('etf_ticker') else ""
-                candidate_summary += f"- {item['name']} ({item['ticker']}) {etf_lbl}: 最終分析評級為【{rating_label}】。\n"
+                s_track = item.get("source_track")
+                track_name = "板塊動能 Beta" if s_track == "sector_momentum" else "板塊防禦 Beta" if s_track == "sector_reversion" else "財務加速 Alpha" if s_track == "bottom_up_acceleration" else "前瞻主題" if s_track == "thematic_scan" else "未指定"
+                candidate_summary += f"- {item['name']} ({item['ticker']}) [選股軌道: {track_name}] {etf_lbl}: 最終分析評級為【{rating_label}】。\n"
         else:
             candidate_summary = "本週無待分析之個股。"
             
@@ -1394,6 +1584,11 @@ def run_weekly_report_phase(regions_list: list, report_date: str, timestamp_suff
             for rec in db_recs:
                 ticker = rec["ticker"]
                 name = rec["company_name"]
+                if ".TW" in ticker.upper() or ".TWO" in ticker.upper():
+                    from core.tools.taiwan_stock_names import get_taiwan_stock_name
+                    tw_name = get_taiwan_stock_name(ticker)
+                    if tw_name and tw_name != ticker:
+                        name = tw_name
                 price_symbol = "$" if (".TW" not in ticker and ".TWO" not in ticker) else "NT$"
                 
                 # Check if it was bought (created on report_date)
@@ -1407,13 +1602,17 @@ def run_weekly_report_phase(regions_list: list, report_date: str, timestamp_suff
                         # If shares > 0, it means we actually had capital and executed a buy
                         if shares > 0:
                             weight_pct = 5.0 if rating == "Hold" else 15.0 if rating == "Buy" else 25.0 if rating == "Strong Buy" else 0.0
+                            s_track = rec.get("source_track")
+                            track_name = "板塊動能 Beta" if s_track == "sector_momentum" else "板塊防禦 Beta" if s_track == "sector_reversion" else "財務加速 Alpha" if s_track == "bottom_up_acceleration" else "前瞻主題" if s_track == "thematic_scan" else "未指定"
                             buys_summary.append(
                                 f"- **買入建倉 {name} ({ticker})**:\n"
                                 f"  - 評級: {rating}\n"
+                                f"  - 選股軌道: {track_name}\n"
                                 f"  - 交易單價: {price_symbol}{rec_price:.2f}\n"
                                 f"  - 買入股數: {shares:.1f} 股\n"
                                 f"  - 投入金額: {price_symbol}{amount:.2f}\n"
-                                f"  - 當前持倉權重: {weight_pct:.1f}%"
+                                f"  - 當前持倉權重: {weight_pct:.1f}%\n"
+                                f"  - 選股原因: {rec.get('recommend_reason')}"
                             )
                         else:
                             # Recommended but blocked / 0 shares bought
@@ -1440,13 +1639,17 @@ def run_weekly_report_phase(regions_list: list, report_date: str, timestamp_suff
                             except Exception as block_ex:
                                 print(f"[!] Warning: Failed to determine block reason for {ticker}: {block_ex}")
                                 
+                            s_track = rec.get("source_track")
+                            track_name = "板塊動能 Beta" if s_track == "sector_momentum" else "板塊防禦 Beta" if s_track == "sector_reversion" else "財務加速 Alpha" if s_track == "bottom_up_acceleration" else "前瞻主題" if s_track == "thematic_scan" else "未指定"
                             blocked_buys_summary.append(
                                 f"- **推薦但未交易 {name} ({ticker})**:\n"
                                 f"  - 評級: {rating}\n"
+                                f"  - 選股軌道: {track_name}\n"
                                 f"  - 交易單價: {price_symbol}{rec_price:.2f}\n"
                                 f"  - 執行股數: 0.0 股\n"
                                 f"  - 投入金額: {price_symbol}0.00\n"
-                                f"  - 未執行原因: {block_reason}"
+                                f"  - 未執行原因: {block_reason}\n"
+                                f"  - 選股原因: {rec.get('recommend_reason')}"
                             )
                 
                 # Check if it was sold (closed on report_date)
@@ -1490,6 +1693,7 @@ def run_weekly_report_phase(regions_list: list, report_date: str, timestamp_suff
         final_markdown = writer_agent.synthesize(
             date_str=date_range_label,
             macro_reports=[mac_rep],
+            liquidity_reports=[liq_rep],
             market_reports=[mkt_rep],
             stock_reports=[stk_rep or "本週暫無推薦股票分析。"],
             reflection_report=reflection_directives,
@@ -1502,7 +1706,25 @@ def run_weekly_report_phase(regions_list: list, report_date: str, timestamp_suff
         if "#" in final_markdown:
             final_markdown = final_markdown[final_markdown.index("#"):]
             
-        print_info(f"[{region_name}] 總編輯生成的原始週報長度: {len(final_markdown)} 字元。")
+        # 移除了所有大項及小項標題前面可能被 LLM 誤加的小圖示與 Emoji
+        import re
+        cleaned_lines = []
+        for line in final_markdown.splitlines():
+            if line.strip().startswith("#"):
+                match = re.match(r'^(\s*#+)\s*(.*)$', line)
+                if match:
+                    hashes, title = match.groups()
+                    # 匹配高 Unicode 區段的符號，包含各種小圖示、Emoji 等，並將其與其後的空白一併移除
+                    cleaned_title = re.sub(r'^[\U00010000-\U0010ffff\u2600-\u27bf\u2300-\u23ff\u2b50\u2100-\u2bff\u2000-\u32ff]\s*', '', title)
+                    cleaned_title = cleaned_title.strip()
+                    cleaned_lines.append(f"{hashes} {cleaned_title}")
+                else:
+                    cleaned_lines.append(line)
+            else:
+                cleaned_lines.append(line)
+        final_markdown = "\n".join(cleaned_lines)
+            
+        print_info(f"[{region_name}] 總編輯生成的原始週報長度: {len(final_markdown)} 字元（已清理標題圖示）。")
         
         try:
             db.save_agent_inference_log(
@@ -1599,6 +1821,165 @@ def run_screener_report_phase(regions_list: list, report_date: str, timestamp_su
         try:
             screener_md, screener_html = screener_instance.generate_report(report_date, sector_rankings=sector_rankings)
             if screener_md:
+                # --- 動態注入三軌融合選股總覽與專章明細至量化報告 ---
+                try:
+                    with db.db_session() as conn:
+                        cursor = conn.cursor()
+                        db.execute_sql(cursor,
+                            "SELECT ticker, company_name, source_track, recommend_reason, recommend_price, rating FROM recommendations WHERE report_date = ? AND region = ?",
+                            "SELECT ticker, company_name, source_track, recommend_reason, recommend_price, rating FROM recommendations WHERE report_date = %s AND region = %s",
+                            (report_date, r_code)
+                        )
+                        rows = cursor.fetchall()
+                        recs = [dict(r) for r in rows]
+                    
+                    # 1. 構造總覽表 (Synthesis Overview Table)
+                    synthesis_section = ""
+                    if recs:
+                        synthesis_section = "\n## 三軌融合最終推薦標的總覽 (Three-Track Unified Recommendations)\n\n"
+                        synthesis_section += "本週系統通過 **三軌融合選股模型**（軌道一：板塊動能/防禦 Beta、軌道二：財務加速 Alpha、軌道三：LLM 前瞻主題掃描）進行全方位篩選，最終選出的代表性推薦標的明細如下：\n\n"
+                        synthesis_section += "| 股票代碼 | 企業名稱 | 推薦評級 | 建倉單價 | 選股軌道 (Source Track) | 核心篩選理由 (Thesis) |\n"
+                        synthesis_section += "| :--- | :--- | :--- | :--- | :--- | :--- |\n"
+                        
+                        for r in recs:
+                            ticker = r["ticker"]
+                            name = r["company_name"]
+                            if ".TW" in ticker.upper() or ".TWO" in ticker.upper():
+                                from core.tools.taiwan_stock_names import get_taiwan_stock_name
+                                tw_name = get_taiwan_stock_name(ticker)
+                                if tw_name and tw_name != ticker:
+                                    name = tw_name
+                            rating = r["rating"]
+                            price = r["recommend_price"]
+                            track = r["source_track"]
+                            reason = r["recommend_reason"]
+                            
+                            price_symbol = "$" if (".TW" not in ticker and ".TWO" not in ticker) else "NT$"
+                            track_name = "前瞻主題掃描" if track == "thematic_scan" else "財務加速 Alpha" if track == "bottom_up_acceleration" else "板塊防禦 Beta (均值回歸)" if track == "sector_reversion" else "板塊動能 Beta (趨勢跟隨)" if track == "sector_momentum" else "未指定"
+                            
+                            synthesis_section += f"| `{ticker}` | {name} | **{rating}** | {price_symbol}{price:.2f} | `{track_name}` | {reason} |\n"
+                        
+                        synthesis_section += "\n---\n"
+                        
+                    # 2. 構造軌道二專章 (Track 2 Chapter)
+                    track2_candidates = r_analysis.get("track2_candidates", [])
+                    track2_section = "\n## 軌道二：全市場財務加速篩選明細 (Financial Acceleration Alpha)\n\n"
+                    track2_section += "本軌道採用 **自下而上 (Bottom-Up) 財務動能掃描**，深入全市場個股的財務基本面，尋找營收或盈餘呈現「拐點加速」的高增長黑馬股（篩選門檻：營收年增率 > 15% 或 EPS 年增率 > 15%）。\n\n"
+                    track2_section += "> [!NOTE]\n"
+                    track2_section += "> **指標定義說明**：表格中的「營收年增率」與「EPS 年增率」指該企業**「最新已公布之季度 (Most Recent Quarter, MRQ)」相較於「去年同期 (YoY)」的增長率**（數據源自 Yahoo Finance 季度數據）。因各企業財報發布時程不同，該指標反映最新已被收錄的單季財務同比增速。\n\n"
+                    
+                    if track2_candidates:
+                        track2_section += "| 排名 | 股票代碼 | 企業名稱 | 營收年增率 | EPS 年增率 | PE 本益比 | PEG 估值 | 站上 50日線? | 綜合得分 |\n"
+                        track2_section += "| :---: | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: |\n"
+                        for idx, cand in enumerate(track2_candidates, 1):
+                            ticker = cand["ticker"]
+                            name = cand["name"]
+                            if ".TW" in ticker.upper() or ".TWO" in ticker.upper():
+                                from core.tools.taiwan_stock_names import get_taiwan_stock_name
+                                tw_name = get_taiwan_stock_name(ticker)
+                                if tw_name and tw_name != ticker:
+                                    name = tw_name
+                            
+                            score = cand["avg_growth"] * 100
+                            rg_val, eg_val = "N/A", "N/A"
+                            pe_val = cand.get("pe_ratio")
+                            peg_val = cand.get("peg_ratio")
+                            price_val = cand.get("current_price")
+                            sma_val = cand.get("fifty_day_sma")
+                            
+                            pe_str = f"{pe_val:.1f}" if pe_val is not None else "N/A"
+                            peg_str = f"{peg_val:.2f}" if peg_val is not None else "N/A (轉機股)"
+                            above_sma = "is_above" if (price_val is not None and sma_val is not None and price_val >= sma_val) else "is_below"
+                            above_sma_text = "是" if above_sma == "is_above" else "否"
+                            
+                            try:
+                                cache_key = f"financials_{ticker.upper()}"
+                                from core.config import CACHE_DIR
+                                f_data = get_cached_data(CACHE_DIR, cache_key, ttl_hours=24)
+                                if f_data:
+                                    rg = f_data.get("revenue_growth")
+                                    eg = f_data.get("eps_growth")
+                                    if rg is not None: rg_val = f"{rg*100:+.1f}%"
+                                    if eg is not None: eg_val = f"{eg*100:+.1f}%"
+                            except Exception:
+                                pass
+                            track2_section += f"| {idx} | `{ticker}` | {name} | {rg_val} | {eg_val} | {pe_str} | {peg_str} | {above_sma_text} | {score:+.1f} |\n"
+                    else:
+                        track2_section += "> [!WARNING]\n> **本週全市場無符合篩選標準（營收/EPS 年增率 > 15% 或符合 PEG/50日均線過濾）的財務加速個股。**\n"
+                    track2_section += "\n---\n"
+                    
+                    # 3. 構造軌道三專章 (Track 3 Chapter)
+                    track3_section = "\n## 軌道三：前瞻主題與概念股挖掘明細 (Forward-Looking Thematic Scan)\n\n"
+                    track3_section += "本軌道採用 **前瞻性大模型主題掃描**，藉由分析最近 7 天全球與區域總經政策、券商投研報告及產業鏈動態，萃取出最具爆發力的前瞻產業主題，並與全市場股池進行即時語意比對，挑選出最具代表性的龍頭概念股。\n\n"
+                    
+                    themes = r_analysis.get("themes", [])
+                    if themes:
+                        track3_section += "#### 💡 本週提煉之三大前瞻投資主題：\n"
+                        for idx, t in enumerate(themes, 1):
+                            track3_section += f"{idx}. **{t}**\n"
+                        track3_section += "\n"
+                        
+                    thematic_recs = [r for r in recs if r.get("source_track") == "thematic_scan"]
+                    if thematic_recs:
+                        track3_section += "#### 🎯 主題概念股語意匹配明細：\n"
+                        track3_section += "| 股票代碼 | 企業名稱 | 推薦評級 | 契合主題與核心推薦邏輯 |\n"
+                        track3_section += "| :--- | :--- | :--- | :--- |\n"
+                        for r in thematic_recs:
+                            ticker = r["ticker"]
+                            name = r["company_name"]
+                            if ".TW" in ticker.upper() or ".TWO" in ticker.upper():
+                                from core.tools.taiwan_stock_names import get_taiwan_stock_name
+                                tw_name = get_taiwan_stock_name(ticker)
+                                if tw_name and tw_name != ticker:
+                                    name = tw_name
+                            rating = r["rating"]
+                            reason = r["recommend_reason"]
+                            track3_section += f"| `{ticker}` | {name} | **{rating}** | {reason} |\n"
+                    else:
+                        track3_section += "> [!WARNING]\n> **本週無符合前瞻產業主題匹配之概念股。**\n"
+                    track3_section += "\n---\n"
+                    
+                    # 4. 進行整體報告重組與拼接
+                    if "## 各板塊強勢個股動態篩選明細" in screener_md:
+                        # 注入總覽，並重命名軌道一標題
+                        screener_md = screener_md.replace(
+                            "## 各板塊強勢個股動態篩選明細",
+                            synthesis_section + "## 軌道一：焦點板塊動態篩選明細 (Sector Beta)"
+                        )
+                        # 拼接軌道二與軌道三專章
+                        if "## 免責聲明 (Disclaimer)" in screener_md:
+                            screener_md = screener_md.replace(
+                                "## 免責聲明 (Disclaimer)",
+                                track2_section + track3_section + "## 免責聲明 (Disclaimer)"
+                            )
+                        elif "## 免責聲明" in screener_md:
+                            screener_md = screener_md.replace(
+                                "## 免責聲明",
+                                track2_section + track3_section + "## 免責聲明"
+                            )
+                        else:
+                            screener_md = screener_md + "\n" + track2_section + track3_section
+                            
+                    elif "## Selected Sector Strong Stock Screening Details" in screener_md:
+                        screener_md = screener_md.replace(
+                            "## Selected Sector Strong Stock Screening Details",
+                            synthesis_section + "## Track 1: Focus Sector Dynamic Screening Details (Sector Beta)"
+                        )
+                        if "## Disclaimer" in screener_md:
+                            screener_md = screener_md.replace(
+                                "## Disclaimer",
+                                track2_section + track3_section + "## Disclaimer"
+                            )
+                        else:
+                            screener_md = screener_md + "\n" + track2_section + track3_section
+                            
+                    # 重新渲染 HTML
+                    import markdown as md_parser
+                    screener_html = md_parser.markdown(screener_md, extensions=['fenced_code', 'tables'])
+                    
+                except Exception as inject_ex:
+                    print(f"[!] Warning: 無法將三軌融合總覽與專章注入選股報告: {inject_ex}")
+                    
                 screener_filename = f"{report_date}_{timestamp_suffix}_screener_report_{r_code}_{REPORT_LANGUAGE}"
                 db.save_report(screener_filename, [r_code], screener_md, screener_html)
                 

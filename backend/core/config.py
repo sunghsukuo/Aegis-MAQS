@@ -40,6 +40,8 @@ CACHE_DIR.mkdir(parents=True, exist_ok=True)
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 DEEPSEEK_API_BASE = os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com")
+FRED_API_KEY = os.getenv("FRED_API_KEY", "0d9b5410ee419509b346f0b439f11557")
+
 
 # LINE Messaging API Configuration
 LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
@@ -117,7 +119,7 @@ TEMPERATURE = 0.2
 
 # Pipeline Limits (for API quota management)
 MAX_SECTORS_PER_REGION = 2  # Default to scan top 2 performing sectors
-MAX_STOCKS_PER_REGION = 4   # Default to deep-dive top 4 representative stocks per region
+MAX_STOCKS_PER_REGION = 6   # Default to deep-dive top 6 representative stocks per region
 
 
 # Dynamic Wind-Down / Drawdown Watchdog Settings
