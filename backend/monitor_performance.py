@@ -33,8 +33,10 @@ from core.utils.formatters import (
 # Import visualization rendering utilities
 from core.visualization.dashboard_renderer import save_html_dashboard
 
+TOTAL_OBSERVATION_DAYS = 60
+
 def main():
-    parser = argparse.ArgumentParser(description="投資研究多代理人系統 - 30天實戰觀測期監控看板")
+    parser = argparse.ArgumentParser(description=f"投資研究多代理人系統 - {TOTAL_OBSERVATION_DAYS}天實戰觀測期監控看板")
     parser.add_argument("--silent", action="store_true", help="靜默執行，不輸出終端機表格")
     parser.add_argument("--send-line", action="store_true", help="主動發送 LINE 監督日報")
     args = parser.parse_args()
@@ -109,17 +111,17 @@ def main():
         start_date_str = datetime.now().strftime("%Y-%m-%d")
         status_label = "尚未正式啟動 (等待首航週報產出)"
 
-    # Calculate 30-day progress
-    elapsed_days, progress_percent, prog_bar = get_progress_bar(start_date_str)
+    # Calculate progress
+    elapsed_days, progress_percent, prog_bar = get_progress_bar(start_date_str, total_days=TOTAL_OBSERVATION_DAYS)
     
     # 2. Render System Header & Status
-    print_header("📊 投資研究多代理人系統 - 30天實戰觀測期監控看板 📊")
+    print_header(f"📊 投資研究多代理人系統 - {TOTAL_OBSERVATION_DAYS}天實戰觀測期監控看板 📊")
     
     print(f"  {BOLD}實戰觀測期進度：{RESET}")
     if reports:
-        print(f"  [{prog_bar}] {BOLD}第 {elapsed_days} / 30 天{RESET} ({progress_percent:.1f}% 已完成)")
+        print(f"  [{prog_bar}] {BOLD}第 {elapsed_days} / {TOTAL_OBSERVATION_DAYS} 天{RESET} ({progress_percent:.1f}% 已完成)")
     else:
-        print(f"  [░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░] {BOLD}第 0 / 30 天{RESET} (等待明早 10:00 週報產出)")
+        print(f"  [░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░] {BOLD}第 0 / {TOTAL_OBSERVATION_DAYS} 天{RESET} (等待明早 10:00 週報產出)")
         
     print(f"\n  • 系統狀態　　: {BOLD}{status_label}{RESET}")
     print(f"  • 週報產出總數: {BOLD}{len(reports)} 份{RESET}")
@@ -332,7 +334,7 @@ def main():
             message = (
                 f"🚨 【風控警報·沙盒資產淨值與回撤警告】\n"
                 f"================================\n"
-                f"觀測進度：第 {elapsed_days} / 30 天\n"
+                f"觀測進度：第 {elapsed_days} / {TOTAL_OBSERVATION_DAYS} 天\n"
                 f"發送時間：{datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n"
                 f"⚠️ 系統已偵測到風控指標突破動態警戒線！\n"
             )
@@ -364,7 +366,7 @@ def main():
                 f"pipenv run python check_portfolio.py"
             )
         else:
-            # 📊 30-Day Sandbox Auto-Pilot Daily Report
+            # 📊 Sandbox Auto-Pilot Daily Report
             total_pnl_twd = sum(r["pnl"] for r in closed_recs if r["region"] != "US")
             total_pnl_usd = sum(r["pnl"] for r in closed_recs if r["region"] == "US")
             total_twd_pnl = total_pnl_twd + active_twd_pnl
@@ -373,9 +375,9 @@ def main():
             total_usd_roi = (total_usd_pnl / 120000.0) * 100
 
             message = (
-                f"📊 【30天沙盒實戰觀測·每日自動監督日報】\n"
+                f"📊 【{TOTAL_OBSERVATION_DAYS}天沙盒實戰觀測·每日自動監督日報】\n"
                 f"================================\n"
-                f"觀測進度：第 {elapsed_days} / 30 天 ({progress_percent:.1f}%)\n"
+                f"觀測進度：第 {elapsed_days} / {TOTAL_OBSERVATION_DAYS} 天 ({progress_percent:.1f}%)\n"
                 f"進度條：[{prog_bar.replace('█', '■').replace('░', '□')}]\n"
                 f"發送時間：{datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n"
                 f"💰 【台股資金水位 (TWD Pocket)】\n"
@@ -480,7 +482,8 @@ def main():
             twd_nav, usd_nav,
             twd_metrics_h, usd_metrics_h,
             perf_data, closed_recs, active_recs,
-            twd_nav_history_h, usd_nav_history_h
+            twd_nav_history_h, usd_nav_history_h,
+            total_days=TOTAL_OBSERVATION_DAYS
         )
     except Exception as html_ex:
         sys.stderr.write(f"[!] 自動 HTML 網頁面板渲染遭遇異常: {html_ex}\n")

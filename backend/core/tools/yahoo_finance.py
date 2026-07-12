@@ -98,7 +98,8 @@ def get_macro_indicators(region_code: str) -> dict:
     for name, ticker in sector_tickers.items():
         try:
             t = yf.Ticker(ticker)
-            hist = t.history(period="1mo").dropna(subset=["Close"])
+            with silence_all():
+                hist = t.history(period="1mo").dropna(subset=["Close"])
             if not hist.empty and len(hist) >= 6:
                 curr = hist["Close"].iloc[-1]
                 prev_w = hist["Close"].iloc[-6]
@@ -121,7 +122,8 @@ def get_macro_indicators(region_code: str) -> dict:
     for name, ticker in macro_tickers.items():
         try:
             t = yf.Ticker(ticker)
-            hist = t.history(period="1mo").dropna(subset=["Close"])
+            with silence_all():
+                hist = t.history(period="1mo").dropna(subset=["Close"])
             if not hist.empty:
                 curr = hist["Close"].iloc[-1]
                 val = float(curr)
@@ -137,11 +139,11 @@ def get_macro_indicators(region_code: str) -> dict:
             
     return results
 
-@retry_on_exception(tries=3, delay=2, backoff=2)
 def _get_single_etf_performance(etf_ticker: str, label_name: str) -> dict:
     """Fetches single ETF weekly performance with robust retries."""
     t = yf.Ticker(etf_ticker)
-    hist = t.history(period="30d").dropna(subset=["Close"])  # Pull more to ensure enough trading days even after long holidays like CNY
+    with silence_all():
+        hist = t.history(period="30d").dropna(subset=["Close"])  # Pull more to ensure enough trading days even after long holidays like CNY
     if hist.empty or len(hist) < 6:
         raise ValueError(f"No sufficient history data for ETF {etf_ticker}")
         
@@ -185,8 +187,8 @@ def get_sector_rankings(region_code: str) -> list:
             label_name = info_val["name"] if isinstance(info_val, dict) else info_val
             perf = _get_single_etf_performance(etf_ticker, label_name)
             rankings.append(perf)
-        except Exception as e:
-            print(f"Error ranking sector {etf_ticker} after permanent failures: {e}")
+        except Exception:
+            print(f"[i] Info: Sector ETF {etf_ticker} has no historical data for this period (might not be listed yet).")
             
     # Sort in descending order (highest return first)
     rankings.sort(key=lambda x: x["weekly_return"], reverse=True)

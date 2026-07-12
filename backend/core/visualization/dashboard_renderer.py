@@ -14,7 +14,8 @@ def save_html_dashboard(
     twd_nav, usd_nav,
     twd_metrics, usd_metrics,
     perf_data, closed_recs, active_recs,
-    twd_nav_history, usd_nav_history
+    twd_nav_history, usd_nav_history,
+    total_days=60
 ):
     """
     Renders the performance monitoring dashboard page using a Jinja2 HTML template.
@@ -63,6 +64,7 @@ def save_html_dashboard(
             status_label=status_label,
             datetime_now=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             elapsed_days=elapsed_days,
+            total_days=total_days,
             progress_percent=f"{progress_percent:.1f}",
             
             twd_nav=fmt(twd_nav),

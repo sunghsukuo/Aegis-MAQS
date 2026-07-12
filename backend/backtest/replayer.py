@@ -331,12 +331,10 @@ def apply_backtest_replayer_sandbox():
         _orig_get_cached = pipeline.get_cached_data
         
         def patched_get_cached_data(*args, **kwargs):
-            if get_simulated_date():
-                return None
             return _orig_get_cached(*args, **kwargs)
             
         pipeline.get_cached_data = patched_get_cached_data
-        print("[✓] [回測沙盒] 成功攔截並停用回測期間的實戰快取（強制穿透查詢歷史數據）。")
+        print("[✓] [回測沙盒] 成功攔截並啟動回測期間之日期隔離快取 (防範數據洩漏且加速模擬)。")
     except Exception as e:
         print(f"[!] Warning: 攔截實戰快取失敗: {e}")
     

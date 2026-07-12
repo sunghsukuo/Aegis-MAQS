@@ -31,6 +31,7 @@ def get_cached_data(cache_dir, cache_key: str, ttl_hours: int = 12) -> dict:
     """
     Retrieves cached data from a local JSON file if it exists and is newer than ttl_hours.
     Returns None if cache is expired, invalid, or missing.
+    Supports date-isolated backtest caching to prevent network rate limits and lookahead bias.
     """
     import os
     import sys
@@ -38,21 +39,43 @@ def get_cached_data(cache_dir, cache_key: str, ttl_hours: int = 12) -> dict:
     from datetime import datetime, timedelta
     from pathlib import Path
     
-    # Bypass cache during backtests/unit tests to prevent lookahead bias or cache pollution
+    sim_date = None
+    is_backtest = os.environ.get("AEGIS_IN_BACKTEST") == "1"
+    if is_backtest:
+        try:
+            from backtest.replayer import get_simulated_date
+            sim_date = get_simulated_date()
+        except Exception:
+            pass
+
     is_testing = "pytest" in sys.modules or "unittest" in sys.modules
-    if os.environ.get("AEGIS_IN_BACKTEST") == "1" or is_testing:
+    
+    # Standard testing check (no simulated date)
+    if is_testing and not sim_date:
         return None
         
-    cache_file = Path(cache_dir) / f"{cache_key}.json"
+    # If in backtest mode but no simulated date is set, bypass cache
+    if is_backtest and not sim_date:
+        return None
+        
+    if sim_date:
+        # Route to date-isolated backtest cache folder
+        target_dir = Path(cache_dir) / f"backtest_{sim_date}"
+        ttl_hours = 999999  # Infinite TTL for historical static backtest data
+    else:
+        target_dir = Path(cache_dir)
+        
+    cache_file = target_dir / f"{cache_key}.json"
     if not cache_file.exists():
         return None
         
     try:
-        # Check mtime (modification time)
-        mtime = datetime.fromtimestamp(os.path.getmtime(cache_file))
-        if datetime.now() - mtime > timedelta(hours=ttl_hours):
-            # Cache expired
-            return None
+        # Check mtime (modification time) if not in backtest
+        if not sim_date:
+            mtime = datetime.fromtimestamp(os.path.getmtime(cache_file))
+            if datetime.now() - mtime > timedelta(hours=ttl_hours):
+                # Cache expired
+                return None
             
         with open(cache_file, "r", encoding="utf-8") as f:
             return json.load(f)
@@ -64,19 +87,38 @@ def get_cached_data(cache_dir, cache_key: str, ttl_hours: int = 12) -> dict:
 def save_to_cache(cache_dir, cache_key: str, data: dict):
     """
     Saves a dictionary as a local JSON file to act as database/network cache.
+    Supports date-isolated backtest caching.
     """
     import os
     import sys
     import json
     from pathlib import Path
     
-    # Bypass cache saving during backtests/unit tests to prevent cache pollution
+    sim_date = None
+    is_backtest = os.environ.get("AEGIS_IN_BACKTEST") == "1"
+    if is_backtest:
+        try:
+            from backtest.replayer import get_simulated_date
+            sim_date = get_simulated_date()
+        except Exception:
+            pass
+
     is_testing = "pytest" in sys.modules or "unittest" in sys.modules
-    if os.environ.get("AEGIS_IN_BACKTEST") == "1" or is_testing:
+    
+    # Standard testing check (no simulated date)
+    if is_testing and not sim_date:
         return
         
-    try:
+    # If in backtest mode but no simulated date is set, bypass cache
+    if is_backtest and not sim_date:
+        return
+        
+    if sim_date:
+        target_dir = Path(cache_dir) / f"backtest_{sim_date}"
+    else:
         target_dir = Path(cache_dir)
+        
+    try:
         target_dir.mkdir(parents=True, exist_ok=True)
         cache_file = target_dir / f"{cache_key}.json"
         with open(cache_file, "w", encoding="utf-8") as f:

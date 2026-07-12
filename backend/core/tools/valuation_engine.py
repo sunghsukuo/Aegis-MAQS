@@ -47,8 +47,10 @@ def get_df_row(df, keys):
 def fetch_risk_free_rate() -> float:
     """Fetches the 10-year US Treasury yield (^TNX) dynamically, falling back to 4.25% on failure."""
     try:
+        from core.tools.yahoo_finance import silence_all
         tnx = yf.Ticker("^TNX")
-        rf_history = tnx.history(period="5d").dropna(subset=["Close"])
+        with silence_all():
+            rf_history = tnx.history(period="5d").dropna(subset=["Close"])
         if not rf_history.empty:
             # ^TNX Close is returned in percentage format (e.g. 4.35 for 4.35%)
             return float(rf_history["Close"].iloc[-1]) / 100.0

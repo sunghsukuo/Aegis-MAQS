@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>30天實戰觀測·智慧對帳與風險監控看板</title>
+    <title>{{ total_days }}天實戰觀測·智慧對帳與風險監控看板</title>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Noto+Sans+TC:wght@300;400;500;700&display=swap" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
@@ -285,7 +285,7 @@
         <!-- Header -->
         <header>
             <div class="header-title">
-                <h1>📊 30天實戰觀測·智慧對帳與風險監控看板</h1>
+                <h1>📊 {{ total_days }}天實戰觀測·智慧對帳與風險監控看板</h1>
                 <div class="status-badge" style="margin-top:0.5rem; display:inline-flex;">{{ status_label }}</div>
             </div>
             <div class="last-update">
@@ -298,7 +298,7 @@
         <div class="progress-card">
             <div class="progress-info">
                 <span>觀測進度</span>
-                <span>第 {{ elapsed_days }} / 30 天 ({{ progress_percent }}%)</span>
+                <span>第 {{ elapsed_days }} / {{ total_days }} 天 ({{ progress_percent }}%)</span>
             </div>
             <div class="progress-track">
                 <div class="progress-fill"></div>

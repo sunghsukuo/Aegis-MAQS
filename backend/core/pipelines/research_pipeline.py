@@ -33,7 +33,102 @@ from core.tools.utils import get_cached_data
 def print_info(msg): print(f"\033[96m[*] {msg}\033[0m")
 def print_warning(msg): print(f"\033[93m[!] {msg}\033[0m")
 def print_success(msg): print(f"\033[93m[✓] {msg}\033[0m")
-def print_error(msg): print(f"\033[91m[✗] {msg}\033[0m")
+
+def find_etf_for_ticker(ticker: str, region_code: str) -> str:
+    """Finds the first active sector ETF ticker that contains this stock in its constituents."""
+    try:
+        sectors = db.get_active_sectors(region_code)
+        for etf_code, config in sectors.items():
+            if ticker in config.get("constituents", []):
+                return etf_code
+    except Exception:
+        pass
+    return "N/A"
+def enforce_investment_disciplines(
+    ticker: str,
+    rating: str,
+    suggested_weight: float | None,
+    financials: dict,
+    curr_price: float,
+    macro_regime: str,
+    price_regime: str,
+    source_track: str | None,
+    custom_recommend_reason: str | None
+) -> tuple[str, float, str, str | None]:
+    """
+    InvestmentDisciplineEnforcer (投資紀律執行器)
+    Programmatically enforces quantitative guardrails (Disciplines 3 & 4) 
+    and handles trend/theme qualitative downgrade protections.
+    """
+    is_trend_or_theme = False
+    if source_track:
+        s_track_upper = source_track.upper()
+        if "動能" in source_track or "防禦" in source_track or "主題" in source_track or "BETA" in s_track_upper or "THEMATIC" in s_track_upper:
+            is_trend_or_theme = True
+            
+    guardrail_status = "無（正常配置）"
+    original_rating = rating
+    
+    # Programmatic Guardrails (Disciplines 3 & 4)
+    is_etf = financials.get("is_etf_proxy", False)
+    if not is_etf:
+        # Discipline 3: Financial Health Redline
+        debt_to_equity = financials.get("debt_to_equity")
+        free_cash_flow = financials.get("free_cash_flow")
+        rev_growth = financials.get("revenue_growth")
+        if debt_to_equity is not None and debt_to_equity > 150.0:
+            if free_cash_flow is not None and free_cash_flow < 0.0:
+                is_exempt = False
+                if rev_growth is not None and rev_growth >= 0.20 and debt_to_equity < 100.0:
+                    is_exempt = True
+                if not is_exempt and rating in ["Buy", "Strong Buy"]:
+                    rating = "Hold"
+                    guardrail_status = f"【財務健康紅線】負債比 {debt_to_equity:.2f}% 且 FCF 為負，觸發紀律三，評級上限強制降為持有。"
+                    print(f"\033[93m[🛡️ 財務風控] {ticker} 觸發財務健康紅線 (D/E={debt_to_equity:.1f}%, FCF<0)，評級上限強制降為持有。\033[0m")
+
+        # Discipline 4: Technical Overheat Warning (200-day SMA deviation)
+        ma200 = financials.get("two_hundred_day_sma")
+        if ma200 is not None and ma200 > 0.0:
+            deviation = ((curr_price - ma200) / ma200) * 100.0
+            if deviation > 25.0 and rating in ["Buy", "Strong Buy"]:
+                rating = "Hold"
+                guardrail_status = f"【技術面過熱】股價高於200日均線 {deviation:.1f}%，觸發紀律四，評級上限強制降為持有。"
+                print(f"\033[93m[🛡️ 技術風控] {ticker} 觸發技術面過熱 (MA200偏離度={deviation:.1f}%)，評級上限強制降為持有。\033[0m")
+
+        # Discipline 4: Technical Overheat Warning (50-day SMA deviation under Mean Reversion)
+        if price_regime in ["REVERSION_BOUND", "MEAN_REVERSION_RANGE"]:
+            ma50 = financials.get("fifty_day_sma")
+            if ma50 is not None and ma50 > 0.0:
+                ma50_deviation = ((curr_price - ma50) / ma50) * 100.0
+                if ma50_deviation > 15.0 and rating in ["Buy", "Strong Buy"]:
+                    rating = "Hold"
+                    guardrail_status = f"【均值回歸防追高】50日均線正偏離度達 {ma50_deviation:+.2f}%，超過 15% 警戒線，強制調降評級。"
+                    print(f"\033[93m[🛡️ 技術風控] {ticker} 觸發均值回歸防追高 (MA50偏離度={ma50_deviation:+.1f}%)，評級上限強制降為持有。\033[0m")
+
+    if rating == "Sell":
+        if is_trend_or_theme:
+            rating = "Hold"
+            guardrail_status = "【降級防禦】動能/主題軌道，大模型判定基本面偏高，系統上調評級並配置 5% 輕倉防守"
+            override_msg = " [⚠️ 決策防線聯動：因該標的屬資金流動能/前瞻主題驅動，為避免大模型基本面定性恐高而完全封殺強勢股，啟動「降級防守」模式，將評級修正為 Hold 並配以 5% 的防守性輕倉，同時收緊移動止損。]"
+            custom_recommend_reason = (custom_recommend_reason or f"Aegis-MAQS 自動分析。當前大盤狀態: {macro_regime}。") + override_msg
+            print(f"\033[93m[🛡️ 決策防線聯動] 偵測到 {ticker} 屬動能/主題型標的且被評為 Sell，啟動「降級防守」提升評級為 Hold，配以 5% 部位。\033[0m")
+        else:
+            guardrail_status = "【完整否決】財務加速軌道，尊重基本面一票否決，預算歸零"
+
+    # Option A: Quant decides, LLM adjusts weight (Hold is allocated a starter 5% weight instead of being blocked)
+    if rating == "Hold":
+        if suggested_weight is not None:
+            suggested_weight = min(suggested_weight, 0.05)
+        else:
+            suggested_weight = 0.05
+    elif rating == "Strong Buy":
+        if suggested_weight is None: suggested_weight = 0.25
+    elif rating == "Buy":
+        if suggested_weight is None: suggested_weight = 0.15
+    else: # Sell or Avoid (Only Track 2 or purely fundamental stocks can be fully vetoed here)
+        suggested_weight = 0.0
+
+    return rating, suggested_weight, guardrail_status, custom_recommend_reason
 
 
 def research_and_track_asset(
@@ -122,15 +217,22 @@ def research_and_track_asset(
             parsed_val = extract_price_from_line(line, curr_price, is_target=False, reference_price=suggested_sl)
             if parsed_val > 0.0: stop_l = parsed_val
         elif "投資評級" in line:
-            line_upper = line.upper()
-            if "STRONG BUY" in line_upper or "強烈買入" in line_upper:
+            parts = line.split("：", 1) if "：" in line else line.split(":", 1)
+            rating_part = parts[1] if len(parts) > 1 else line
+            rating_part = rating_part.split("(")[0].split("（")[0].strip().upper()
+            
+            if "STRONG BUY" in rating_part or "強烈買入" in rating_part:
                 rating = "Strong Buy"
-            elif "SELL" in line_upper or "賣出" in line_upper or "避開" in line_upper or "避免" in line_upper or "不建議買入" in line_upper:
+            elif "BUY" in rating_part or "買入" in rating_part:
+                # Ensure we don't treat "Avoid/避免買入" as Buy
+                if "AVOID" in rating_part or "避免" in rating_part or "SELL" in rating_part or "賣出" in rating_part:
+                    rating = "Sell"
+                else:
+                    rating = "Buy"
+            elif "AVOID" in rating_part or "避免" in rating_part or "SELL" in rating_part or "賣出" in rating_part or "不建議買入" in rating_part:
                 rating = "Sell"
-            elif "HOLD" in line_upper or "持有" in line_upper or "NEUTRAL" in line_upper or "觀望" in line_upper:
+            elif "HOLD" in rating_part or "持有" in rating_part or "NEUTRAL" in rating_part or "觀望" in rating_part:
                 rating = "Hold"
-            elif "BUY" in line_upper or "買入" in line_upper:
-                rating = "Buy"
 
         elif "建議持倉權重" in line or "持倉權重" in line or "建議權重" in line:
             weight_match = re.search(r"(\d+(?:\.\d+)?)\s*%", line)
@@ -140,33 +242,19 @@ def research_and_track_asset(
                 except ValueError:
                     pass
                     
-    # 🕵️‍♂️ 決策防線聯動：降級防守，禁止封殺
-    # 若標的來源於「板塊動能/防禦 Beta (趨勢/回歸)」或「前瞻主題」選股軌道（即資金與趨勢驅動型），
-    # 且大模型評級為 Sell/Avoid（避開），則強制將其評級提升至 "Hold"，分配 5% 的極輕倉位以防「定性恐高」封殺強勢股行情。
-    is_trend_or_theme = False
-    if source_track:
-        s_track_upper = source_track.upper()
-        if "動能" in source_track or "防禦" in source_track or "主題" in source_track or "BETA" in s_track_upper or "THEMATIC" in s_track_upper:
-            is_trend_or_theme = True
-            
-    if rating == "Sell" and is_trend_or_theme:
-        rating = "Hold"
-        override_msg = " [⚠️ 決策防線聯動：因該標的屬資金流動能/前瞻主題驅動，為避免大模型基本面定性恐高而完全封殺強勢股，啟動「降級防守」模式，將評級修正為 Hold 並配以 5% 的防守性輕倉，同時收緊移動止損。]"
-        custom_recommend_reason = (custom_recommend_reason or f"Aegis-MAQS 自動分析。當前大盤狀態: {macro_regime}。") + override_msg
-        print(f"\033[93m[🛡️ 決策防線聯動] 偵測到 {ticker} 屬動能/主題型標的且被評為 Sell，啟動「降級防守」提升評級為 Hold，配以 5% 部位。\033[0m")
-
-    # Option A: Quant decides, LLM adjusts weight (Hold is allocated a starter 5% weight instead of being blocked)
-    if rating == "Hold":
-        if suggested_weight is not None:
-            suggested_weight = min(suggested_weight, 0.05)
-        else:
-            suggested_weight = 0.05
-    elif rating == "Strong Buy":
-        if suggested_weight is None: suggested_weight = 0.25
-    elif rating == "Buy":
-        if suggested_weight is None: suggested_weight = 0.15
-    else: # Sell or Avoid (Only Track 2 or purely fundamental stocks can be fully vetoed here)
-        suggested_weight = 0.0
+    # 🕵️‍♂️ 決策防線聯動與投資紀律強化 (InvestmentDisciplineEnforcer)
+    original_rating = rating
+    rating, suggested_weight, guardrail_status, custom_recommend_reason = enforce_investment_disciplines(
+        ticker=ticker,
+        rating=rating,
+        suggested_weight=suggested_weight,
+        financials=financials,
+        curr_price=curr_price,
+        macro_regime=macro_regime,
+        price_regime=price_regime,
+        source_track=source_track,
+        custom_recommend_reason=custom_recommend_reason
+    )
 
     invested_amount = 0.0
     shares = 0.0
@@ -184,7 +272,15 @@ def research_and_track_asset(
         if rating in ["Buy", "Strong Buy", "Hold"]:
             from core.agents.budget_agent import BudgetAgent
             budget_agent = BudgetAgent()
-            invested_amount, shares = budget_agent.allocate_budget(ticker, region_code, curr_price, custom_weight=suggested_weight, report_date=report_date)
+            invested_amount, shares = budget_agent.allocate_budget(
+                ticker, 
+                region_code, 
+                curr_price, 
+                custom_weight=suggested_weight, 
+                report_date=report_date,
+                price_regime=price_regime,
+                source_track=source_track
+            )
         
         reason = custom_recommend_reason or f"Aegis-MAQS 自動分析。當前大盤狀態: {macro_regime}。"
         try:
@@ -239,12 +335,19 @@ def research_and_track_asset(
         "valuation_report": valuation_report,
         "news_analysis": news_analysis,
         "rating": rating,
+        "original_rating": original_rating,
+        "guardrail_status": guardrail_status,
         "target_price": target_p,
         "stop_loss": stop_l,
         "suggested_weight": suggested_weight,
         "invested_amount": invested_amount,
         "shares": shares,
-        "rec_id": rec_id
+        "rec_id": rec_id,
+        "curr_price": curr_price,
+        "fundamental_prompt": fundamental_agent.last_prompt,
+        "fundamental_version": fundamental_agent.prompt_version,
+        "news_prompt": news_agent.last_prompt,
+        "news_version": news_agent.prompt_version
     }
 
 def run_regional_reflection(region_code: str, report_date: str, state: dict = None) -> str:
@@ -1467,6 +1570,9 @@ def run_analyze_stocks_phase(regions_list: list, report_date: str, state: dict):
         
         stock_analysis_reports = []
         analyzed_summary = []
+        analyzed_results = []
+        
+        # 1. 深度定性分析所有個股 (不寫入 DB，亦不分配預算)
         for stock in target_stocks:
             ticker = stock["ticker"]
             name = stock["name"]
@@ -1477,6 +1583,8 @@ def run_analyze_stocks_phase(regions_list: list, report_date: str, state: dict):
                     name = tw_name
             target_type = stock.get("target_type", "constituents")
             etf_ticker = stock.get("etf_ticker")
+            if not etf_ticker or etf_ticker == "N/A":
+                etf_ticker = find_etf_for_ticker(ticker, r_code)
             
             s_track = stock.get("source_track")
             s_reason = stock.get("reason")
@@ -1494,7 +1602,7 @@ def run_analyze_stocks_phase(regions_list: list, report_date: str, state: dict):
                 macro_report=macro_report,
                 reflection_directives=reflection_directives,
                 report_date=report_date,
-                save_to_db=True,
+                save_to_db=False,  # 平行分配前先不寫入
                 custom_recommend_reason=custom_reason,
                 price_regime=price_regime,
                 source_track=s_track
@@ -1502,25 +1610,119 @@ def run_analyze_stocks_phase(regions_list: list, report_date: str, state: dict):
             if not res:
                 continue
                 
-            if target_type == "proxy":
+            res["metadata"] = {
+                "ticker": ticker,
+                "name": name,
+                "target_type": target_type,
+                "etf_ticker": etf_ticker,
+                "s_track": s_track,
+                "s_reason": s_reason,
+                "custom_reason": custom_reason
+            }
+            analyzed_results.append(res)
+
+        # 2. 調用 BudgetAgent 進行「平行比例分配」
+        candidates_for_budget = []
+        for item in analyzed_results:
+            meta = item["metadata"]
+            candidates_for_budget.append({
+                "ticker": meta["ticker"],
+                "recommend_price": item["curr_price"],
+                "suggested_weight": item["suggested_weight"],
+                "source_track": meta["s_track"],
+                "rating": item["rating"]
+            })
+            
+        from core.agents.budget_agent import BudgetAgent
+        budget_agent = BudgetAgent()
+        allocated_results = budget_agent.allocate_portfolio_budgets(
+            candidates=candidates_for_budget,
+            region=r_code,
+            report_date=report_date,
+            price_regime=price_regime
+        )
+        
+        # 3. 遍歷分配結果，執行資料庫寫入、交易流水紀錄與日誌存檔
+        for idx, item in enumerate(analyzed_results):
+            meta = item["metadata"]
+            alloc = allocated_results[idx]
+            invested_amount = alloc["invested_amount"]
+            shares = alloc["shares"]
+            ticker = meta["ticker"]
+            name = meta["name"]
+            etf_ticker = meta["etf_ticker"]
+            s_track = meta["s_track"]
+            s_reason = meta["s_reason"]
+            custom_reason = meta["custom_reason"]
+            
+            # 寫入推薦表 (recommendations)
+            rec_id = None
+            try:
+                rec_id = db.save_recommendation(
+                    report_date=report_date,
+                    region=r_code,
+                    ticker=ticker,
+                    company_name=name,
+                    recommend_price=item["curr_price"],
+                    recommend_reason=custom_reason,
+                    target_price=item["target_price"],
+                    stop_loss=item["stop_loss"],
+                    rating=item["rating"],
+                    invested_amount=invested_amount,
+                    shares=shares,
+                    macro_regime=macro_regime,
+                    price_regime=price_regime,
+                    source_track=s_track
+                )
+                
+                # 寫入交易流水 (transaction_history)
+                if invested_amount > 0.0:
+                    budget_agent.record_purchase(rec_id, ticker, r_code, item["curr_price"], invested_amount, shares)
+                    
+                # 寫入推論日誌
+                db.save_agent_inference_log(
+                    rec_id=rec_id,
+                    agent_name="FundamentalAgent",
+                    ticker=ticker,
+                    input_prompt=item["fundamental_prompt"],
+                    output_response=item["stock_report"],
+                    prompt_version=item["fundamental_version"],
+                    report_date=report_date
+                )
+                db.save_agent_inference_log(
+                    rec_id=rec_id,
+                    agent_name="NewsAgent",
+                    ticker=ticker,
+                    input_prompt=item["news_prompt"],
+                    output_response=item["news_analysis"],
+                    prompt_version=item["news_version"],
+                    report_date=report_date
+                )
+            except Exception as db_ex:
+                print_warning(f"平行分配後寫入數據庫異常: {db_ex}")
+                
+            if meta["target_type"] == "proxy":
                 try:
                     sector_rankings = state["analysis"][r_code]["sector_rankings"]
                     etf_rank = next((sec for sec in sector_rankings if sec["ticker"] == etf_ticker), {})
                     weekly_mom = etf_rank.get("weekly_return", 0.0)
-                    screener_instance.record_proxy_etf(etf_ticker, r_code, financials=res["financials"], weekly_return=weekly_mom)
+                    screener_instance.record_proxy_etf(etf_ticker, r_code, financials=item["financials"], weekly_return=weekly_mom)
                 except Exception as ex:
                     print_warning(f"記錄篩選報告 proxy ETF 失敗: {ex}")
                     
-            stock_analysis_reports.append(res["stock_report"])
+            stock_analysis_reports.append(item["stock_report"])
             analyzed_summary.append({
                 "ticker": ticker,
                 "name": name,
-                "rating": res["rating"],
+                "rating": item["rating"],
+                "original_rating": item.get("original_rating", item["rating"]),
+                "guardrail_status": item.get("guardrail_status", "無（正常配置）"),
                 "etf_ticker": etf_ticker,
                 "source_track": s_track,
-                "reason": s_reason
+                "reason": s_reason,
+                "suggested_weight": item.get("suggested_weight")
             })
-            print_success(f"標的 {ticker} 推薦參數與預算已成功寫入回測帳本！(現價: {res['financials'].get('current_price', 0.0):.2f} | 分配預算: {res['invested_amount']:.2f} | 股數: {res['shares']:.2f})")
+            print_success(f"標的 {ticker} 推薦參數與預算已成功寫入帳本！(現價: {item['curr_price']:.2f} | 分配預算: {invested_amount:.2f} | 股數: {shares:.2f})")
             
         state["analysis"][r_code]["stock_reports_combined"] = "\n\n---\n\n".join(stock_analysis_reports)
         state["analysis"][r_code]["analyzed_stocks_summary"] = analyzed_summary
@@ -1556,10 +1758,14 @@ def run_weekly_report_phase(regions_list: list, report_date: str, timestamp_suff
             candidate_summary += "本週所有進行深度基本面分析之候選標的與評級如下：\n"
             for item in analyzed_summary_list:
                 rating_label = "買入 Buy" if item['rating'] == "Buy" else "強烈買入 Strong Buy" if item['rating'] == "Strong Buy" else "持有 Hold" if item['rating'] == "Hold" else "避免買入 Avoid"
+                orig_label = "買入 Buy" if item.get('original_rating') == "Buy" else "強烈買入 Strong Buy" if item.get('original_rating') == "Strong Buy" else "持有 Hold" if item.get('original_rating') == "Hold" else "避免買入 Avoid"
                 etf_lbl = f"（隸屬板塊/ETF: {item['etf_ticker']}）" if item.get('etf_ticker') else ""
                 s_track = item.get("source_track")
                 track_name = "板塊動能 Beta" if s_track == "sector_momentum" else "板塊防禦 Beta" if s_track == "sector_reversion" else "財務加速 Alpha" if s_track == "bottom_up_acceleration" else "前瞻主題" if s_track == "thematic_scan" else "未指定"
-                candidate_summary += f"- {item['name']} ({item['ticker']}) [選股軌道: {track_name}] {etf_lbl}: 最終分析評級為【{rating_label}】。\n"
+                g_status = item.get("guardrail_status", "無（正常配置）")
+                suggested_w = item.get("suggested_weight")
+                w_lbl = f"，建議持倉權重為【{suggested_w*100:.1f}%】" if suggested_w is not None else ""
+                candidate_summary += f"- {item['name']} ({item['ticker']}) [選股軌道: {track_name}] {etf_lbl}: 原始評級為【{orig_label}】，最終分析評級為【{rating_label}】{w_lbl}，決策防線聯動機制狀態為【{g_status}】。\n"
         else:
             candidate_summary = "本週無待分析之個股。"
             
@@ -1601,7 +1807,23 @@ def run_weekly_report_phase(regions_list: list, report_date: str, timestamp_suff
                     if rating in ["Buy", "Strong Buy", "Hold"]:
                         # If shares > 0, it means we actually had capital and executed a buy
                         if shares > 0:
-                            weight_pct = 5.0 if rating == "Hold" else 15.0 if rating == "Buy" else 25.0 if rating == "Strong Buy" else 0.0
+                            # Calculate actual applied weight dynamically based on starting capital
+                            currency = "USD" if (".TW" not in ticker and ".TWO" not in ticker) else "TWD"
+                            try:
+                                from core.agents.budget_agent import BudgetAgent
+                                budget_agent = BudgetAgent()
+                                state_ledger = budget_agent.get_capital_state(currency)
+                                current_available = state_ledger["available_capital"]
+                                today_buys_sum = sum(
+                                    r["invested_amount"] for r in db_recs 
+                                    if r["report_date"] == report_date and r["invested_amount"] > 0.0
+                                    and (("USD" if (".TW" not in r["ticker"] and ".TWO" not in r["ticker"]) else "TWD") == currency)
+                                )
+                                starting_capital = current_available + today_buys_sum
+                                weight_pct = (amount / starting_capital) * 100 if starting_capital > 0.0 else 0.0
+                            except Exception:
+                                weight_pct = 5.0 if rating == "Hold" else 15.0 if rating == "Buy" else 25.0 if rating == "Strong Buy" else 0.0
+                                
                             s_track = rec.get("source_track")
                             track_name = "板塊動能 Beta" if s_track == "sector_momentum" else "板塊防禦 Beta" if s_track == "sector_reversion" else "財務加速 Alpha" if s_track == "bottom_up_acceleration" else "前瞻主題" if s_track == "thematic_scan" else "未指定"
                             buys_summary.append(
@@ -1632,7 +1854,9 @@ def run_weekly_report_phase(regions_list: list, report_date: str, timestamp_suff
                                     state = budget_agent.get_capital_state(currency)
                                     available = state["available_capital"]
                                     min_threshold = 100.0 if currency == "USD" else 3000.0
-                                    if available < min_threshold:
+                                    if rating == "Hold" and rec.get("invested_amount", 0.0) == 0.0 and available >= min_threshold:
+                                        block_reason = "【自適應配置調控】大模型基本面評估其存在財務結構風險（如高負債或負自由現金流），建議 0% 倉位空手觀望，未獲配發預算。"
+                                    elif available < min_threshold:
                                         block_reason = f"【資金限制】{currency} 帳戶可用資金僅 {price_symbol}{available:.2f}（低於系統安全建倉門檻 {price_symbol}{min_threshold:.2f}），暫停配發預算。"
                                     elif available < rec_price:
                                         block_reason = f"【資金限制】{currency} 帳戶可用資金僅 {price_symbol}{available:.2f}（低於個股單價 {price_symbol}{rec_price:.2f}），不足購買 1 股。"
@@ -1882,6 +2106,29 @@ def run_screener_report_phase(regions_list: list, report_date: str, timestamp_su
                             
                             score = cand["avg_growth"] * 100
                             rg_val, eg_val = "N/A", "N/A"
+                            
+                            # 1. 優先從候選股字典 (cand) 讀取已篩選出的財務增長數據
+                            rg = cand.get("revenue_growth")
+                            eg = cand.get("eps_growth")
+                            if rg is not None and rg != 0.0:
+                                rg_val = f"{rg*100:+.1f}%"
+                            if eg is not None and eg != 0.0:
+                                eg_val = f"{eg*100:+.1f}%"
+                                
+                            # 2. 若仍為 N/A，則嘗試從快取讀取作為 Fallback (主要針對無 ticker_list 的邊緣情況)
+                            if rg_val == "N/A" or eg_val == "N/A":
+                                try:
+                                    cache_key = f"financials_{ticker.upper()}"
+                                    from core.config import CACHE_DIR
+                                    f_data = get_cached_data(CACHE_DIR, cache_key, ttl_hours=24)
+                                    if f_data:
+                                        if rg_val == "N/A" and f_data.get("revenue_growth") is not None:
+                                            rg_val = f"{f_data.get('revenue_growth')*100:+.1f}%"
+                                        if eg_val == "N/A" and f_data.get("eps_growth") is not None:
+                                            eg_val = f"{f_data.get('eps_growth')*100:+.1f}%"
+                                except Exception:
+                                    pass
+                            # 3. 讀取並格式化其餘估值與技術指標
                             pe_val = cand.get("pe_ratio")
                             peg_val = cand.get("peg_ratio")
                             price_val = cand.get("current_price")
@@ -1892,17 +2139,6 @@ def run_screener_report_phase(regions_list: list, report_date: str, timestamp_su
                             above_sma = "is_above" if (price_val is not None and sma_val is not None and price_val >= sma_val) else "is_below"
                             above_sma_text = "是" if above_sma == "is_above" else "否"
                             
-                            try:
-                                cache_key = f"financials_{ticker.upper()}"
-                                from core.config import CACHE_DIR
-                                f_data = get_cached_data(CACHE_DIR, cache_key, ttl_hours=24)
-                                if f_data:
-                                    rg = f_data.get("revenue_growth")
-                                    eg = f_data.get("eps_growth")
-                                    if rg is not None: rg_val = f"{rg*100:+.1f}%"
-                                    if eg is not None: eg_val = f"{eg*100:+.1f}%"
-                            except Exception:
-                                pass
                             track2_section += f"| {idx} | `{ticker}` | {name} | {rg_val} | {eg_val} | {pe_str} | {peg_str} | {above_sma_text} | {score:+.1f} |\n"
                     else:
                         track2_section += "> [!WARNING]\n> **本週全市場無符合篩選標準（營收/EPS 年增率 > 15% 或符合 PEG/50日均線過濾）的財務加速個股。**\n"

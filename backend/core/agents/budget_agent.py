@@ -59,23 +59,12 @@ class BudgetAgent:
             pass
         return "UNKNOWN"
 
-    def allocate_budget(self, ticker: str, region: str, recommend_price: float, custom_weight: float = None, report_date: str = None) -> tuple:
+    def calculate_target_ratio(self, ticker: str, region: str, custom_weight: float = None, report_date: str = None, price_regime: str = None, source_track: str = None) -> float:
         """
-        根據當前可用資金與分配比例，為單一推薦個股分配可投資總額與計算股數。
-        優先採用 AI 代理人建議的權重，若無則採用預設比例。
-        :return: (invested_amount, shares) - 分配金額與購買股數
+        Calculates the final allowed ratio for a stock after applying all wind-control limits.
         """
-        currency = self.get_currency_by_region(region)
-        state = self.get_capital_state(currency)
-        available = state["available_capital"]
-        original_available = available
+        from datetime import datetime
         
-        # Check if the risk circuit breaker is active for this currency (Circuit Breaker block)
-        from core.db_manager import get_risk_circuit_breaker
-        if get_risk_circuit_breaker(currency):
-            print(f"[🛑 熔斷機制] 偵測到 {currency} 帳戶已啟動風控熔斷！全面凍結新標的 {ticker} 的買入預算配發。")
-            return 0.0, 0.0
-            
         # Check if the ticker is an ETF itself (skip earnings blocker for ETFs)
         is_etf = False
         try:
@@ -90,74 +79,22 @@ class BudgetAgent:
             check_date = report_date or datetime.now().strftime("%Y-%m-%d")
             is_blocked, next_earnings_date, biz_days = is_earnings_block_active(ticker, check_date)
             if is_blocked:
-                print(f"[🛡️ Wind 風控] 偵測到 {ticker} 即將於 {next_earnings_date} 公布財報 (距離檢測日 {check_date} 僅 {biz_days} 個交易日)。")
-                print(f"            已啟動財報前交易禁令，凍結該標的新增買入預算。")
-                return 0.0, 0.0
-            
-        # 安全下限閥值：若可用資金過低，則不予分配新交易
-        min_threshold = 100.0 if currency == "USD" else 3000.0
-        if available < min_threshold:
-            print(f"[!] 預算代理人提示：{currency} 可用資金過低 ({available:.2f})，無法為 {ticker} 分配新預算。")
-            return 0.0, 0.0
+                print(f"[🛡️ Wind 風控] 偵測到 {ticker} 即將於 {next_earnings_date} 公布財報。已啟動財報前交易禁令，比率降為 0。")
+                return 0.0
 
-        # --- 🕵️‍♂️ 流動性偵察與防禦機制 (Liquidity Scout Integration) ---
-        is_backtest_mode = False
-        query_date = report_date or datetime.now().strftime("%Y-%m-%d")
-        try:
-            from backtest.replayer import get_simulated_date
-            sim_date = get_simulated_date()
-            if sim_date:
-                is_backtest_mode = True
-                query_date = sim_date
-        except Exception:
-            pass
-            
-        cls_score = 0.5
-        try:
-            from core.tools.liquidity_loader import get_liquidity_state
-            liq_state = get_liquidity_state(query_date, is_backtest=is_backtest_mode)
-            cls_score = liq_state.get("composite_score", 0.5)
-        except Exception as liq_ex:
-            print(f"[!] 預算代理人警告：無法獲取流動性狀態，預設中性。錯誤: {liq_ex}")
-            
-        # 套用流動性緊縮防禦 (CLS >= 0.70 視為緊縮)
-        is_liquidity_stressed = cls_score >= 0.70
-        if is_liquidity_stressed:
-            # 1. 鎖定 15% 資金作為流動性安全緩衝金 (Liquidity Buffer)
-            total_pocket = available + state.get("reserved_cash", 0.0)
-            liq_buffer = total_pocket * 0.15
-            available = max(0.0, available - liq_buffer)
-            print(f"[🛡️ 流動性防禦] 偵測到市場流動性緊縮 (CLS: {cls_score:.2f})！")
-            print(f"            暫時鎖定 {liq_buffer:.2f} {currency} 安全緩衝金。可用計算資金調降至 {available:.2f}。")
+        # Base ratio (preserve 0.0 to allow the LLM to veto buying by recommending 0%)
+        ratio = custom_weight if custom_weight is not None else self.allocation_ratio
 
-        # 決定分配權重 (優先採用 AI 建議權重)
-        ratio = custom_weight if custom_weight is not None and custom_weight > 0.0 else self.allocation_ratio
-        
-        # 獲取第二層 Meso Regime 與自適應板塊權重限制
+        # Meso regime
         from core.regime.multi_factor import detect_meso_regime
         try:
             meso_info = detect_meso_regime(region_code=region)
             meso_regime = meso_info.get("regime", "BULL_GROWTH_ON")
         except Exception:
             meso_regime = "BULL_GROWTH_ON"
-            
-        # 決定此標的板塊的最大配置比率
+
+        # Sector tier limits
         sector_code = self.get_ticker_sector(ticker, region)
-        
-        # 美股板塊定義 (作為降級備用)
-        is_tech_us = sector_code in ["XLK", "XLC"]
-        is_defensive_us = sector_code in ["XLP", "XLU", "XLV"]
-        
-        # 台股板塊定義 (作為降級備用，對應 0050.TW 技術成分股與防守股)
-        tech_tw_tickers = {"2330.TW", "2454.TW", "2317.TW", "2308.TW", "2357.TW", "2382.TW", "3231.TW", "3711.TW"}
-        defensive_tw_tickers = {"1216.TW", "2412.TW", "2912.TW"}
-        is_tech_tw = ticker in tech_tw_tickers
-        is_defensive_tw = ticker in defensive_tw_tickers
-        
-        is_tech = is_tech_us or is_tech_tw
-        is_defensive = is_defensive_us or is_defensive_tw
-        
-        # 動態獲取板塊週績效排名
         sector_tier = "medium"
         ranking_success = False
         try:
@@ -168,107 +105,241 @@ class BudgetAgent:
                 if sector_code.upper() in ranked_sectors:
                     idx = ranked_sectors.index(sector_code.upper())
                     num_sectors = len(ranked_sectors)
-                    
-                    if idx < 3: # 前 3 名強勢
+                    if idx < 3:
                         sector_tier = "top"
-                    elif idx >= max(3, num_sectors - 3): # 後 3 名弱勢
+                    elif idx >= max(3, num_sectors - 3):
                         sector_tier = "bottom"
                     else:
                         sector_tier = "medium"
                     ranking_success = True
-                    print(f"[*] 預算代理人：{ticker} 所屬板塊 {sector_code} 週績效排名第 {idx + 1}/{num_sectors} (歸類為 {sector_tier.upper()} 級)。")
-        except Exception as e:
-            print(f"[!] 預算代理人提示：動態獲取板塊排行失敗，將降級套用靜態板塊限制。錯誤: {e}")
-            
-        # 三層自適應決策漏斗 —— 預算限制矩陣
-        max_ratio = 0.40  # 預設上限
-        
+        except Exception:
+            pass
+
+        max_ratio = 0.40
         if ranking_success:
-            # A. 動態板塊評級預算限制
             if meso_regime in ["BULL_GROWTH_ON", "BULL_VALUE_ON"]:
-                if sector_tier == "top":
-                    max_ratio = 0.40
-                elif sector_tier == "medium":
-                    max_ratio = 0.25
-                else: # bottom
-                    max_ratio = 0.10
+                if sector_tier == "top": max_ratio = 0.40
+                elif sector_tier == "medium": max_ratio = 0.25
+                else: max_ratio = 0.10
             elif meso_regime == "VOLATILE_PANIC":
-                if sector_tier == "top":
-                    max_ratio = 0.25
-                elif sector_tier == "medium":
-                    max_ratio = 0.15
-                else: # bottom
-                    max_ratio = 0.05
+                if sector_tier == "top": max_ratio = 0.25
+                elif sector_tier == "medium": max_ratio = 0.15
+                else: max_ratio = 0.05
             elif meso_regime == "BEAR_RISK_OFF":
-                if sector_tier == "top":
-                    max_ratio = 0.20
-                elif sector_tier == "medium":
-                    max_ratio = 0.10
-                else: # bottom
-                    max_ratio = 0.00  # 凍結買入
+                if sector_tier == "top": max_ratio = 0.20
+                elif sector_tier == "medium": max_ratio = 0.10
+                else: max_ratio = 0.00
             else:
-                if sector_tier == "top":
-                    max_ratio = 0.35
-                elif sector_tier == "medium":
-                    max_ratio = 0.20
-                else: # bottom
-                    max_ratio = 0.10
+                if sector_tier == "top": max_ratio = 0.35
+                elif sector_tier == "medium": max_ratio = 0.20
+                else: max_ratio = 0.10
         else:
-            # B. 降級 Fallback: 原始靜態板塊限制
-            if meso_regime == "BULL_GROWTH_ON":
-                # 科技多頭：科技股上限為 40%，非科技股上限縮至 20%
-                max_ratio = 0.40 if is_tech else 0.20
-            elif meso_regime == "BULL_VALUE_ON":
-                # 傳統多頭：傳統股/價值股上限為 40%，科技股上限縮至 20%
-                max_ratio = 0.20 if is_tech else 0.40
-            elif meso_regime == "VOLATILE_PANIC":
-                # 高波震盪：全域上限降低至 20% 防禦
-                max_ratio = 0.20
-            elif meso_regime == "BEAR_RISK_OFF":
-                # 系統性空頭：防禦性板塊上限為 30%，進攻性板塊上限為 10%
-                max_ratio = 0.30 if is_defensive else 0.10
-            
+            # Fallback
+            is_tech_us = sector_code in ["XLK", "XLC"]
+            tech_tw_tickers = {"2330.TW", "2454.TW", "2317.TW", "2308.TW", "2357.TW", "2382.TW", "3231.TW", "3711.TW"}
+            is_tech = is_tech_us or (ticker in tech_tw_tickers)
+            is_defensive_us = sector_code in ["XLP", "XLU", "XLV"]
+            defensive_tw_tickers = {"1216.TW", "2412.TW", "2912.TW"}
+            is_defensive = is_defensive_us or (ticker in defensive_tw_tickers)
+            if meso_regime == "BULL_GROWTH_ON": max_ratio = 0.40 if is_tech else 0.20
+            elif meso_regime == "BULL_VALUE_ON": max_ratio = 0.20 if is_tech else 0.40
+            elif meso_regime == "VOLATILE_PANIC": max_ratio = 0.20
+            elif meso_regime == "BEAR_RISK_OFF": max_ratio = 0.30 if is_defensive else 0.10
+
+        # Apply relaxation rules
+        is_reversion_strategy = (price_regime == "REVERSION_RANGEBOUND")
+        is_alpha_or_thematic = source_track in ["bottom_up_acceleration", "thematic_scan"]
+        if sector_tier == "bottom" and (is_reversion_strategy or is_alpha_or_thematic):
+            old_max_ratio = max_ratio
+            if meso_regime in ["BULL_GROWTH_ON", "BULL_VALUE_ON"]: max_ratio = 0.25
+            elif meso_regime == "VOLATILE_PANIC": max_ratio = 0.15
+            elif meso_regime == "BEAR_RISK_OFF": max_ratio = 0.10
+            else: max_ratio = 0.20
+            print(f"            [🛡️ 預算動態放寬] 觸發弱勢板塊限制放寬！將 {ticker} 所屬弱勢板塊 {sector_code} 的預算上限由 {old_max_ratio*100:.1f}% 提升至 {max_ratio*100:.1f}%。")
+
         ratio = min(ratio, max_ratio)
-        
-        # 如果處於流動性緊縮狀態，強制將單檔持倉權重上限砍半，最高不超過 12%
+
+        # Liquidity stress limits
+        query_date = report_date or datetime.now().strftime("%Y-%m-%d")
+        is_backtest_mode = False
+        try:
+            from backtest.replayer import get_simulated_date
+            sim_date = get_simulated_date()
+            if sim_date:
+                is_backtest_mode = True
+                query_date = sim_date
+        except Exception:
+            pass
+
+        cls_score = 0.5
+        try:
+            from core.tools.liquidity_loader import get_liquidity_state
+            liq_state = get_liquidity_state(query_date, is_backtest=is_backtest_mode)
+            cls_score = liq_state.get("composite_score", 0.5)
+        except Exception:
+            pass
+
+        is_liquidity_stressed = cls_score >= 0.70
         if is_liquidity_stressed:
             ratio = min(ratio, 0.12)
             print(f"            [🛡️ 流動性防禦] 已強制將 {ticker} 的最大配置權重下修至 12% 以分散風險。")
         
-        # 計算分配金額 (可用資金 * 權重)
-        target_budget = available * ratio
-        
-        # 計算買入股數 (無條件捨去至整數股)
-        import math
-        shares = math.floor(target_budget / recommend_price)
-        
-        # 確保最低 1 股防線 (只要剩餘可用資金足夠買 1 股即可)
-        if shares < 1:
-            if available >= recommend_price:
-                shares = 1
-                print(f"[!] 預算代理人提示：為符合最低買入 1 股限制，將 {ticker} 股數調整為 1 股。")
-            else:
-                print(f"[!] 預算代理人提示：{currency} 可用資金 ({available:.2f}) 不足購買 {ticker} 的 1 股 (現價 {recommend_price:.2f})，不予分配。")
-                return 0.0, 0.0
-                
-        # 實際投入金額 = 股數 * 單價 (整數股買入後，金額會有精確小數點)
-        invested_amount = shares * recommend_price
-        
-        # 扣減 capital_ledger 中的可用資金
-        new_available = original_available - invested_amount
-        
-        with db_session() as conn:
-            cursor = conn.cursor()
-            execute_sql(cursor,
-                # SQLite
-                "UPDATE capital_ledger SET available_capital = ? WHERE currency = ?",
-                # MySQL
-                "UPDATE capital_ledger SET available_capital = %s WHERE currency = %s",
-                (new_available, currency)
+        return ratio
+
+    def allocate_portfolio_budgets(self, candidates: list, region: str, report_date: str = None, price_regime: str = None) -> list:
+        """
+        Allocates budgets simultaneously for all candidates in a region using Proportional Scaling.
+        candidates: list of dicts:
+            {
+                "ticker": str,
+                "recommend_price": float,
+                "suggested_weight": float,
+                "source_track": str,
+                "rating": str
+            }
+        """
+        from datetime import datetime
+        currency = self.get_currency_by_region(region)
+        state = self.get_capital_state(currency)
+        available = state["available_capital"]
+        original_available = available
+
+        # Check risk circuit breaker
+        from core.db_manager import get_risk_circuit_breaker
+        if get_risk_circuit_breaker(currency):
+            print(f"[🛑 熔斷機制] {currency} 帳戶已啟動風控熔斷！凍結所有買入預算。")
+            for c in candidates:
+                c["invested_amount"] = 0.0
+                c["shares"] = 0.0
+            return candidates
+
+        # Check minimum threshold
+        min_threshold = 100.0 if currency == "USD" else 3000.0
+        if available < min_threshold:
+            print(f"[!] 可用資金過低 ({available:.2f})，無法分配預算。")
+            for c in candidates:
+                c["invested_amount"] = 0.0
+                c["shares"] = 0.0
+            return candidates
+
+        # Calculate CLS score and safety buffer
+        query_date = report_date or datetime.now().strftime("%Y-%m-%d")
+        is_backtest_mode = False
+        try:
+            from backtest.replayer import get_simulated_date
+            sim_date = get_simulated_date()
+            if sim_date:
+                is_backtest_mode = True
+                query_date = sim_date
+        except Exception:
+            pass
+
+        cls_score = 0.5
+        try:
+            from core.tools.liquidity_loader import get_liquidity_state
+            liq_state = get_liquidity_state(query_date, is_backtest=is_backtest_mode)
+            cls_score = liq_state.get("composite_score", 0.5)
+        except Exception:
+            pass
+
+        # Apply liquidity pocket buffer
+        is_liquidity_stressed = cls_score >= 0.70
+        available_pool = available
+        if is_liquidity_stressed:
+            total_pocket = available + state.get("reserved_cash", 0.0)
+            liq_buffer = total_pocket * 0.15
+            available_pool = max(0.0, available - liq_buffer)
+            print(f"[🛡️ 流動性防禦] 鎖定 {liq_buffer:.2f} {currency} 安全緩衝金。可用池降為 {available_pool:.2f}。")
+
+        # 1. First Pass: calculate individual target ratios
+        ratios = []
+        for c in candidates:
+            ticker = c["ticker"]
+            custom_weight = c.get("suggested_weight")
+            source_track = c.get("source_track")
+            rating = c.get("rating", "Hold")
+
+            if rating not in ["Buy", "Strong Buy", "Hold"]:
+                ratios.append(0.0)
+                continue
+
+            target_ratio = self.calculate_target_ratio(
+                ticker=ticker,
+                region=region,
+                custom_weight=custom_weight,
+                report_date=report_date,
+                price_regime=price_regime,
+                source_track=source_track
             )
-            
-        print(f"[✓] 預算代理人：已為 {ticker} 動態分配預算 {invested_amount:.2f} {currency} (購買整數股：{shares} 股，現價：{recommend_price:.2f})。")
-        return invested_amount, float(shares)
+            ratios.append(target_ratio)
+
+        # 2. Second Pass: proportional scaling if sum exceeds 100% (1.0)
+        total_ratio = sum(ratios)
+        scaled_ratios = list(ratios)
+        if total_ratio > 1.0:
+            print(f"[⚖️ 預算平行配分] 當期分配比例總和為 {total_ratio*100:.1f}%，超過 100%。啟動等比例限縮至 100%。")
+            for idx in range(len(ratios)):
+                scaled_ratios[idx] = ratios[idx] / total_ratio
+        else:
+            print(f"[⚖️ 預算平行配分] 當期分配比例總和為 {total_ratio*100:.1f}%，未超過 100%，予以完整配分。")
+
+        # 3. Third Pass: calculate dollar amounts and shares based on initial available_pool snapshot
+        total_invested = 0.0
+        for idx, c in enumerate(candidates):
+            ratio = scaled_ratios[idx]
+            recommend_price = c["recommend_price"]
+            ticker = c["ticker"]
+
+            if ratio <= 0.0 or recommend_price <= 0.0:
+                c["invested_amount"] = 0.0
+                c["shares"] = 0.0
+                continue
+
+            target_budget = available_pool * ratio
+            import math
+            shares = math.floor(target_budget / recommend_price)
+
+            if shares < 1:
+                # Minimum 1 share check if remaining pool allows
+                current_rem = available_pool - total_invested
+                if current_rem >= recommend_price:
+                    shares = 1
+                else:
+                    shares = 0
+
+            invested_amount = shares * recommend_price
+            total_invested += invested_amount
+
+            c["invested_amount"] = invested_amount
+            c["shares"] = float(shares)
+            c["ratio_applied"] = ratio
+            print(f"[✓] 分配完成: {ticker} 分配比例: {ratio*100:.2f}%, 投入金額: {invested_amount:.2f} {currency} ({shares} 股)")
+
+        # 4. Fourth Pass: update database capital ledger with the final total invested sum
+        if total_invested > 0.0:
+            new_available = original_available - total_invested
+            import core.db_manager as db
+            with db.db_session() as conn:
+                cursor = conn.cursor()
+                db.execute_sql(cursor,
+                    "UPDATE capital_ledger SET available_capital = ? WHERE currency = ?",
+                    "UPDATE capital_ledger SET available_capital = %s WHERE currency = %s",
+                    (new_available, currency)
+                )
+
+        return candidates
+
+    def allocate_budget(self, ticker: str, region: str, recommend_price: float, custom_weight: float = None, report_date: str = None, price_regime: str = None, source_track: str = None) -> tuple:
+        """Compatibility wrapper for single target allocation."""
+        candidate = {
+            "ticker": ticker,
+            "recommend_price": recommend_price,
+            "suggested_weight": custom_weight,
+            "source_track": source_track,
+            "rating": "Buy" if (custom_weight and custom_weight > 0.05) else "Hold"
+        }
+        res = self.allocate_portfolio_budgets([candidate], region, report_date, price_regime)
+        return res[0]["invested_amount"], res[0]["shares"]
 
     def record_purchase(self, rec_id: int, ticker: str, region: str, price: float, amount: float, shares: float):
         """
