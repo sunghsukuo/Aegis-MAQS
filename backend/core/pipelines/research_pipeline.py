@@ -44,6 +44,9 @@ def find_etf_for_ticker(ticker: str, region_code: str) -> str:
     except Exception:
         pass
     return "N/A"
+
+def print_error(msg): print(f"\033[91m[✗] {msg}\033[0m")
+
 def enforce_investment_disciplines(
     ticker: str,
     rating: str,
@@ -1851,8 +1854,8 @@ def run_weekly_report_phase(regions_list: list, report_date: str, timestamp_suff
                                     block_reason = f"【風控熔斷】偵測到 {currency} 帳戶已啟動風控熔斷，全面凍結買入預算配發。"
                                 else:
                                     budget_agent = BudgetAgent()
-                                    state = budget_agent.get_capital_state(currency)
-                                    available = state["available_capital"]
+                                    cap_state = budget_agent.get_capital_state(currency)
+                                    available = cap_state["available_capital"]
                                     min_threshold = 100.0 if currency == "USD" else 3000.0
                                     if rating == "Hold" and rec.get("invested_amount", 0.0) == 0.0 and available >= min_threshold:
                                         block_reason = "【自適應配置調控】大模型基本面評估其存在財務結構風險（如高負債或負自由現金流），建議 0% 倉位空手觀望，未獲配發預算。"

@@ -166,7 +166,7 @@ def get_dynamic_mdd_limit(macro_regime: str = None, currency: str = 'TWD') -> fl
         
     if not macro_regime:
         limit = adjusted_base * vix_scale
-        return max(0.005, min(limit, 0.20))
+        return max(0.025, min(limit, 0.20))
         
     regime = macro_regime.upper()
     limit = adjusted_base
@@ -181,8 +181,8 @@ def get_dynamic_mdd_limit(macro_regime: str = None, currency: str = 'TWD') -> fl
     # Scale the final limit by VIX scale
     limit = limit * vix_scale
     
-    # Apply a sanity lower bound of 0.5% (0.005) and upper bound of 20% (0.20)
-    return max(0.005, min(limit, 0.20))
+    # Apply a realistic lower bound of 2.5% (0.025) and upper bound of 20% (0.20)
+    return max(0.025, min(limit, 0.20))
 
 
 def check_risk_circuit_breaker(currency: str, region_name: str, total_nav: float, metrics: dict) -> dict:
